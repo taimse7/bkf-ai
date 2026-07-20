@@ -1,0 +1,61 @@
+name: Mac Build Proof
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apple-silicon:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Test Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build native app and DMG
+        run: pnpm tauri build --target aarch64-apple-darwin --bundles app,dmg
+
+      - name: Verify artifacts
+        run: |
+          test -d "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/BKF AI.app"
+          find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -name '*.dmg' -type f | grep -q .
+          file "src-tauri/target/aarch64-apple-darwin/release/bkf-ai" | grep -q arm64
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bkf-ai-macos-arm64
+          path: |
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
