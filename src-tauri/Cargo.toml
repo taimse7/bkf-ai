@@ -1,0 +1,23 @@
+[package]
+name = "bkf-ai"
+version = "0.1.0"
+description = "BKF AI macOS build proof"
+authors = ["BKF AI contributors"]
+edition = "2021"
+
+[lib]
+name = "bkf_ai_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+bkf-scanner-core = { path = "scanner-core" }
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"

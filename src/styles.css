@@ -1,0 +1,60 @@
+:root {
+  font-family: Arial, "Noto Sans Hebrew", sans-serif;
+  color: #172b3a;
+  background: #edf2f4;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  direction: rtl;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 720px; min-height: 100vh; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
+
+.app-shell { min-height: 100vh; padding: 26px; background: linear-gradient(145deg, #f4f7f8, #e6eef1); }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; max-width: 1500px; margin: 0 auto 18px; }
+.eyebrow { margin: 0 0 5px; color: #29768b; font-weight: 800; font-size: 13px; letter-spacing: .04em; }
+h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
+.actions { display: flex; gap: 10px; }
+.primary, .secondary { min-height: 42px; padding: 0 18px; border-radius: 11px; border: 1px solid transparent; font-weight: 750; }
+.primary { color: white; background: #176e83; box-shadow: 0 7px 18px rgba(23,110,131,.22); }
+.secondary { color: #304757; background: white; border-color: #cbd7dc; }
+.danger { color: #9c2f35; border-color: #e3b8ba; }
+
+.source-card, .library-card { max-width: 1500px; margin-inline: auto; border: 1px solid #d4dfe3; border-radius: 16px; background: rgba(255,255,255,.94); box-shadow: 0 14px 38px rgba(23,43,58,.08); }
+.source-card { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 15px 18px; margin-bottom: 14px; }
+.label { display: block; margin-bottom: 4px; color: #6a7b87; font-size: 12px; }
+.source-path { display: block; max-width: 70vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scan-metrics { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
+.scan-metrics > span:first-child { color: #176e83; font-weight: 800; }
+.error-count { color: #a13137; }
+.error-banner { max-width: 1500px; margin: 0 auto 14px; padding: 12px 16px; color: #8b252b; background: #fff0f0; border: 1px solid #efc5c7; border-radius: 11px; }
+
+.library-card { overflow: hidden; }
+.library-header, .library-row { display: grid; grid-template-columns: 64px minmax(160px,1.2fr) minmax(230px,2fr) 90px 85px 155px 130px; align-items: center; gap: 12px; padding-inline: 15px; }
+.library-header { height: 46px; color: #526673; background: #f6f8f9; border-bottom: 1px solid #dce5e8; font-size: 12px; font-weight: 800; }
+.virtual-viewport { position: relative; height: min(62vh, 670px); min-height: 360px; overflow: auto; overscroll-behavior: contain; }
+.virtual-spacer { position: relative; width: 100%; }
+.library-row { position: absolute; inset-inline: 0; top: 0; height: 58px; border-bottom: 1px solid #edf1f2; background: white; font-size: 13px; }
+.library-row:hover { background: #f7fbfc; }
+.check-cell { display: grid; place-items: center; height: 100%; }
+.check-cell input { width: 17px; height: 17px; accent-color: #176e83; }
+.ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.path { direction: rtl; color: #4c6473; }
+.type { width: fit-content; min-width: 58px; padding: 4px 8px; text-align: center; border-radius: 999px; font-weight: 850; font-size: 11px; }
+.type-bkc { color: #165f3c; background: #e5f5ec; }
+.type-bkf { color: #774c11; background: #fff1d5; }
+.type-unknown { color: #56646e; background: #edf1f3; }
+.item-status { font-size: 12px; }
+.status-ready, .status-completed { color: #217047; }
+.status-permission_denied, .status-read_error, .status-disconnected { color: #a13137; font-weight: 700; }
+.row-loading { grid-column: 1 / -1; color: #788994; }
+.empty-state { display: grid; height: 100%; place-items: center; color: #6c7c87; }
+.library-footer { display: flex; justify-content: space-between; gap: 20px; padding: 11px 15px; color: #667985; background: #f7f9fa; border-top: 1px solid #dce5e8; font-size: 12px; }
+
+@media (max-width: 980px) {
+  .library-header, .library-row { grid-template-columns: 54px 180px minmax(220px,1fr) 80px 70px 140px 110px; }
+  .topbar, .source-card { align-items: flex-start; }
+}
