@@ -26,3 +26,5 @@
 - The virtual library uses fixed-height rows and paged queries; search, sorting controls, and
   filtering are outside stage 2.
 - This stage does not convert, decode, preview, or export BKC/BKF content.
+- The first native macOS workflow exposed a missing Tauri icon and therefore did not reach app/DMG
+  bundling. Icons are now included, but the corrected native workflow has not yet run.

@@ -51,3 +51,12 @@ Status: implemented and core-tested; native Tauri integration build on macOS is 
   `pkg-config`/GTK development libraries.
 - Apple Silicon cross-check from Linux: blocked by the absence of an Apple Objective-C compiler/SDK.
 - Native `.app`/`.dmg` build: not run; a macOS host is still required.
+
+### First native macOS run
+
+- GitHub Actions run `29739837810` used macOS 14.8.7 on an Apple Silicon runner.
+- Checkout, pnpm, Node.js, Rust setup, dependency installation, and frontend build passed.
+- Rust compilation reached the application crate and failed because the required
+  `src-tauri/icons/icon.png` asset was missing.
+- A complete Tauri icon set was then generated from `app-icon.svg`; the native run must be
+  repeated before stage 2 can be marked complete.
