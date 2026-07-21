@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import { visibleRange } from "./virtualization";
 
 type FileType = "BKC" | "BKF" | "Unknown";
@@ -45,35 +45,6 @@ interface ConversionJob {
   technicalReport: string | null;
 }
 
-interface ProbeReport {
-  formatVersion: number;
-  kind: "bkc" | "bkf" | "unknown";
-  fileSize: number;
-  bkc: {
-    startxref: number;
-    physicalXref: number;
-    baseOffset: number;
-    xrefObjectNumber: number;
-    eofPhysicalOffset: number;
-  } | null;
-  bkf: {
-    standardDjvuSignatureVisible: boolean;
-    pageIndexStatus: string;
-  } | null;
-  decoderAvailable: boolean;
-  evidence: Array<{
-    status: "proven" | "hypothesis" | "unknown";
-    key: string;
-    detail: string;
-  }>;
-}
-
-interface ProbeSelection {
-  name: string;
-  inputPath: string;
-  report: ProbeReport;
-}
-
 const ROW_HEIGHT = 58;
 const PAGE_SIZE = 240;
 
@@ -113,15 +84,11 @@ function App() {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nameQuery, setNameQuery] = useState("");
-  const [fileTypeFilter, setFileTypeFilter] = useState<"" | FileType>("");
   const [destination, setDestination] = useState("");
   const [collisionPolicy, setCollisionPolicy] = useState<"skip" | "rename">("skip");
   const [queue, setQueue] = useState<ConversionJob[]>([]);
-  const [probe, setProbe] = useState<ProbeSelection | null>(null);
-  const [probingPath, setProbingPath] = useState<string | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef("");
-  const typeFilterRef = useRef<"" | FileType>("");
   const loadedPages = useRef(new Set<number>());
 
   const loadPage = useCallback(async (scanId: string, offset: number, query: string, force = false) => {
@@ -134,7 +101,6 @@ function App() {
         offset: pageOffset,
         limit: PAGE_SIZE,
         nameQuery: query,
-        fileType: typeFilterRef.current,
       });
       if (query !== queryRef.current) return;
       setTotal(page.total);
@@ -145,7 +111,7 @@ function App() {
       });
     } catch (reason) {
       loadedPages.current.delete(pageOffset);
-      showFriendlyError(reason);
+      setError(String(reason));
     }
   }, []);
 
@@ -166,7 +132,7 @@ function App() {
         const scan = await invoke<ScanRun | null>("resume_last_scan");
         if (active && scan) resetLibrary(scan);
       } catch (reason) {
-        if (active) showFriendlyError(reason);
+        if (active) setError(String(reason));
       } finally {
         if (active) setBusy(false);
       }
@@ -188,7 +154,7 @@ function App() {
       }
     });
     const conversionUnlisten = listen<ConversionJob[]>("conversion-progress", ({ payload }) => setQueue(payload));
-    void invoke<ConversionJob[]>("resume_conversion_queue").then((jobs) => active && setQueue(jobs)).catch((reason) => active && showFriendlyError(reason));
+    void invoke<ConversionJob[]>("resume_conversion_queue").then((jobs) => active && setQueue(jobs)).catch((reason) => active && setError(String(reason)));
     return () => {
       active = false;
       void unlisten.then((dispose) => dispose());
@@ -215,7 +181,6 @@ function App() {
 
   useEffect(() => {
     queryRef.current = nameQuery;
-    typeFilterRef.current = fileTypeFilter;
     if (!run) return;
     const timer = window.setTimeout(() => {
       loadedPages.current.clear();
@@ -226,21 +191,7 @@ function App() {
       void loadPage(run.id, 0, nameQuery, true);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [fileTypeFilter, loadPage, nameQuery, run?.id]);
-
-  const showFriendlyError = (reason: unknown) => {
-    console.error(reason);
-    setError("הפעולה לא הושלמה. אפשר להוריד את קובץ האבחון ולצרף אותו לבדיקה.");
-  };
-
-  const downloadLog = async () => {
-    const target = await save({ title: "שמירת קובץ אבחון", defaultPath: "bkf-ai-diagnostics.log" });
-    if (!target) return;
-    try {
-      await invoke("export_diagnostics", { outputPath: target });
-      setError(null);
-    } catch (reason) { showFriendlyError(reason); }
-  };
+  }, [loadPage, nameQuery, run?.id]);
 
   const chooseSource = async () => {
     setError(null);
@@ -251,7 +202,7 @@ function App() {
       const scan = await invoke<ScanRun>("start_scan", { sourcePath: selected });
       resetLibrary(scan);
     } catch (reason) {
-      showFriendlyError(reason);
+      setError(String(reason));
     } finally {
       setBusy(false);
     }
@@ -273,53 +224,16 @@ function App() {
       setQueue(await invoke<ConversionJob[]>("enqueue_conversions", {
         scanId: run.id, relativePaths, allSupported, destinationPath: destination, collisionPolicy,
       }));
-    } catch (reason) { showFriendlyError(reason); }
+    } catch (reason) { setError(String(reason)); }
   };
 
-  const retryFailed = async () => {
-    const failed = queue.filter((job) => ["failed", "cancelled", "disconnected"].includes(job.status));
-    try {
-      for (const job of failed) {
-        await invoke<ConversionJob[]>("retry_conversion", { id: job.id });
-      }
-    } catch (reason) { showFriendlyError(reason); }
+  const retry = async (id: string) => {
+    try { setQueue(await invoke<ConversionJob[]>("retry_conversion", { id })); }
+    catch (reason) { setError(String(reason)); }
   };
 
   const openPath = async (path: string) => {
-    try { await invoke("open_local_path", { path }); } catch (reason) { showFriendlyError(reason); }
-  };
-
-  const probeItem = async (item: LibraryItem) => {
-    if (!run) return;
-    setError(null);
-    setProbingPath(item.relativePath);
-    try {
-      const separator = run.rootPath.endsWith("/") ? "" : "/";
-      const report = await invoke<ProbeReport>("probe_book_structure", {
-        inputPath: `${run.rootPath}${separator}${item.relativePath}`,
-      });
-      setProbe({ name: item.name, inputPath: `${run.rootPath}${separator}${item.relativePath}`, report });
-    } catch (reason) {
-      showFriendlyError(reason);
-    } finally {
-      setProbingPath(null);
-    }
-  };
-
-  const exportProbe = async () => {
-    if (!probe) return;
-    const safeName = probe.name.replace(/[^\p{L}\p{N}._-]+/gu, "-");
-    const target = await save({
-      title: "שמירת דוח בדיקת מבנה",
-      defaultPath: `${safeName}.probe.json`,
-    });
-    if (!target) return;
-    try {
-      await invoke("export_probe_report", { inputPath: probe.inputPath, outputPath: target });
-      setError(null);
-    } catch (reason) {
-      showFriendlyError(reason);
-    }
+    try { await invoke("open_local_path", { path }); } catch (reason) { setError(String(reason)); }
   };
 
   const toggleSelected = async (index: number, item: LibraryItem) => {
@@ -334,7 +248,7 @@ function App() {
       });
     } catch (reason) {
       setItems((current) => new Map(current).set(index, item));
-      showFriendlyError(reason);
+      setError(String(reason));
     }
   };
 
@@ -354,13 +268,8 @@ function App() {
             <span className={`type type-${item.fileType.toLowerCase()}`}>{item.fileType}</span>
             <time>{item.modifiedMs ? new Date(item.modifiedMs).toLocaleString("he-IL") : "—"}</time>
             <span className={`item-status status-${item.status}`}>{statusLabels[item.status] ?? item.status}</span>
-            <div className="row-actions">
-              <button className="row-action" onClick={() => void probeItem(item)} disabled={probingPath !== null}>
-                {probingPath === item.relativePath ? "בודק…" : "בדיקת מבנה"}
-              </button>
-              {item.fileType === "BKC" && <button className="row-action" onClick={() => void enqueue([item.relativePath])} disabled={!destination}>המרה</button>}
-              {item.fileType === "BKF" && <span className="bkf-note" title="הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.">אין מפענח</span>}
-            </div>
+            {item.fileType === "BKC" ? <button className="row-action" onClick={() => void enqueue([item.relativePath])} disabled={!destination}>המרה</button> :
+              item.fileType === "BKF" ? <span className="bkf-note" title="הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.">אין מפענח</span> : <span>—</span>}
           </>
         ) : <span className="row-loading">טוען רשומה…</span>}
       </div>,
@@ -368,11 +277,6 @@ function App() {
   }
 
   const isRunning = run?.status === "running";
-  const activeConversion = queue.find((job) => job.status === "running");
-  const completedConversions = queue.filter((job) => job.status === "completed");
-  const finishedConversions = queue.filter((job) => ["completed", "skipped", "unsupported", "failed", "cancelled", "disconnected"].includes(job.status));
-  const failedConversions = queue.filter((job) => ["failed", "cancelled", "disconnected"].includes(job.status));
-  const lastCompleted = completedConversions.at(-1);
 
   return (
     <main className="app-shell">
@@ -397,11 +301,11 @@ function App() {
         <div className="scan-metrics">
           <span>{statusLabels[run?.status ?? ""] ?? (busy ? "טוען" : "ממתין")}</span>
           <strong>{(run?.scanned ?? 0).toLocaleString("he-IL")} קבצים</strong>
-          {(run?.errors ?? 0) > 0 && <span className="error-count">חלק מהקבצים לא נקראו</span>}
+          {(run?.errors ?? 0) > 0 && <span className="error-count">{run?.errors} שגיאות</span>}
         </div>
       </section>
 
-      {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button></div>}
+      {error && <div className="error-banner" role="alert">{error}</div>}
 
       <section className="conversion-card" aria-label="המרת BKC ל-PDF">
         <div className="conversion-heading">
@@ -419,65 +323,25 @@ function App() {
           <label><input type="radio" checked={collisionPolicy === "rename"} onChange={() => setCollisionPolicy("rename")} /> שינוי שם אוטומטי</label>
           {destination && <button className="link-button" onClick={() => void openPath(destination)}>פתיחת תיקיית היעד</button>}
         </div>
-        {probe && <div className={`probe-panel probe-${probe.report.kind}`} aria-live="polite">
-          <div className="probe-heading">
-            <div><span className="label">תוצאת Probe מה־Rust backend</span><strong dir="auto">{probe.name}</strong></div>
-            <div className="probe-actions">
-              <button className="row-action" onClick={() => void exportProbe()}>הורדת דוח JSON</button>
-              <span className={`type type-${probe.report.kind}`}>{probe.report.kind.toUpperCase()}</span>
-            </div>
-          </div>
-          <dl className="probe-values">
-            <div><dt>גודל</dt><dd dir="ltr">{formatSize(probe.report.fileSize)}</dd></div>
-            <div><dt>מפענח זמין</dt><dd>{probe.report.decoderAvailable ? "כן" : "לא"}</dd></div>
-            {probe.report.bkc && <>
-              <div><dt>baseOffset</dt><dd dir="ltr">{probe.report.bkc.baseOffset.toLocaleString("en-US")}</dd></div>
-              <div><dt>startxref</dt><dd dir="ltr">{probe.report.bkc.startxref.toLocaleString("en-US")}</dd></div>
-              <div><dt>physicalXref</dt><dd dir="ltr">{probe.report.bkc.physicalXref.toLocaleString("en-US")}</dd></div>
-              <div><dt>XRef object</dt><dd dir="ltr">{probe.report.bkc.xrefObjectNumber}</dd></div>
-            </>}
-            {probe.report.bkf && <>
-              <div><dt>אינדקס עמודים</dt><dd dir="ltr">{probe.report.bkf.pageIndexStatus}</dd></div>
-              <div><dt>חתימת DjVu גלויה</dt><dd>{probe.report.bkf.standardDjvuSignatureVisible ? "כן" : "לא"}</dd></div>
-            </>}
-          </dl>
-          {probe.report.evidence.length > 0 && <details className="probe-evidence">
-            <summary>ראיות ומגבלות ({probe.report.evidence.length})</summary>
-            <ul>
-              {probe.report.evidence.map((item, index) =>
-                <li key={`${item.key}-${index}`} data-status={item.status}>
-                  <strong dir="ltr">{item.key}</strong>: {item.detail}
-                </li>)}
-            </ul>
-          </details>}
-          {!probe.report.decoderAvailable && <p className="probe-warning">
-            {probe.report.kind === "bkf"
-              ? "הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. הוא לא יישלח למנוע ההמרה."
-              : probe.report.kind === "bkc"
-                ? "מבנה BKC זוהה, אך עדיין לא קיים פרופיל פענוח מאומת עבור וריאנט זה."
-                : "מבנה הקובץ אינו מוכר ולכן הוא לא יישלח להמרה."}
-          </p>}
-        </div>}
-        {queue.length > 0 && <div className="queue-summary" aria-live="polite">
+        <p className="bkf-warning">הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. קובצי BKF אינם נשלחים למנוע ההמרה.</p>
+        {queue.length > 0 && <>
           <div className="overall-progress">
-            <div className="progress-copy">
-              <strong>{activeConversion ? `ממיר כעת: ${activeConversion.name}` : "סיכום ההמרה"}</strong>
-              <span>{finishedConversions.length} מתוך {queue.length} הסתיימו</span>
-            </div>
+            <span>התקדמות כוללת</span>
             <progress value={queue.reduce((sum, job) => sum + job.processedBytes, 0)} max={Math.max(1, queue.reduce((sum, job) => sum + job.totalBytes, 0))} />
-            <strong>{finishedConversions.length}/{queue.length}</strong>
+            <strong>{queue.filter((job) => ["completed", "skipped", "unsupported"].includes(job.status)).length}/{queue.length}</strong>
           </div>
-          <div className="conversion-results">
-            <span className="result-success">{completedConversions.length} הומרו</span>
-            {queue.some((job) => job.status === "skipped") && <span>{queue.filter((job) => job.status === "skipped").length} דולגו</span>}
-            {failedConversions.length > 0 && <span className="result-failed">{failedConversions.length} לא הושלמו</span>}
-            <div className="summary-actions">
-              {lastCompleted && <button onClick={() => void openPath(lastCompleted.outputPath)}>פתיחת ה־PDF האחרון</button>}
-              {failedConversions.length > 0 && <button onClick={() => void retryFailed()}>ניסיון חוזר לנכשלים</button>}
-              {failedConversions.length > 0 && <button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button>}
+          <div className="queue-list">{queue.map((job) => <article className="queue-job" key={job.id}>
+            <div><strong dir="auto">{job.name}</strong><span>{job.status === "running" ? "ממיר" : (statusLabels[job.status] ?? job.status)}</span></div>
+            <progress value={job.processedBytes} max={Math.max(1, job.totalBytes)} />
+            <span>{formatSize(job.processedBytes)} / {formatSize(job.totalBytes)}</span>
+            <div className="job-actions">
+              {job.status === "completed" && <button onClick={() => void openPath(job.outputPath)}>פתיחת ה־PDF</button>}
+              {(["failed", "cancelled", "disconnected"].includes(job.status)) && <button onClick={() => void retry(job.id)}>ניסיון חוזר</button>}
+              {job.technicalReport && <details><summary>דוח שגיאה טכני</summary><pre dir="ltr">{job.technicalReport}</pre></details>}
             </div>
-          </div>
-        </div>}
+            {job.error && <p className="job-error">{job.error}</p>}
+          </article>)}</div>
+        </>}
       </section>
 
       <section className="library-card" aria-label="רשימת קבצים">
@@ -486,14 +350,6 @@ function App() {
           <input id="library-search" type="search" value={nameQuery}
             onChange={(event) => setNameQuery(event.target.value)}
             placeholder="הקלד שם קובץ…" disabled={!run} dir="auto" />
-          <label htmlFor="file-type-filter">סוג קובץ</label>
-          <select id="file-type-filter" value={fileTypeFilter} disabled={!run}
-            onChange={(event) => setFileTypeFilter(event.target.value as "" | FileType)}>
-            <option value="">כל הסוגים</option>
-            <option value="BKC">BKC — נתמך להמרה</option>
-            <option value="BKF">BKF — ללא מפענח</option>
-            <option value="Unknown">לא מזוהה</option>
-          </select>
           {nameQuery && <span>{total.toLocaleString("he-IL")} תוצאות</span>}
         </div>
         <div className="library-header">

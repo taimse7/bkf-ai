@@ -14,7 +14,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 bkf-converter-core = { path = "converter-core" }
-bkf-container-probe = { path = "container-probe" }
 bkf-scanner-core = { path = "scanner-core" }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

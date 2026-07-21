@@ -3,6 +3,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use uuid::Uuid;
 
 const PREFIX_LEN: usize = 200;
@@ -25,6 +26,7 @@ pub enum ConversionError {
     Io(io::Error),
     InvalidBkc(&'static str),
     UnknownDecoderProfile,
+    RepairUnavailable(String),
     UnsafeOutput(String),
     InvalidPdf(String),
     Cancelled,
@@ -36,6 +38,7 @@ impl std::fmt::Display for ConversionError {
             Self::Io(error) => write!(f, "{error}"),
             Self::InvalidBkc(reason) => write!(f, "BKC לא תקין: {reason}"),
             Self::UnknownDecoderProfile => f.write_str("וריאנט BKC לא מוכר; ההמרה נעצרה"),
+            Self::RepairUnavailable(reason) => write!(f, "מנוע תיקון PDF אינו זמין: {reason}"),
             Self::UnsafeOutput(reason) => write!(f, "יעד פלט לא בטוח: {reason}"),
             Self::InvalidPdf(reason) => write!(f, "אימות PDF נכשל: {reason}"),
             Self::Cancelled => f.write_str("ההמרה בוטלה בבטחה"),
@@ -106,14 +109,16 @@ where
     source.seek(SeekFrom::Start(tail_start))?;
     let mut tail = Vec::with_capacity((input_size - tail_start) as usize);
     source.read_to_end(&mut tail)?;
-    let startxref_marker = rfind(&tail, b"startxref")
+    let startxref_marker = rfind(&tail, b"startxref\n")
         .ok_or(ConversionError::InvalidBkc("startxref לא נמצא"))?;
-    let startxref = parse_decimal_line(&tail[startxref_marker + b"startxref".len()..])
+    let startxref = parse_decimal_line(&tail[startxref_marker + 10..])
         .ok_or(ConversionError::InvalidBkc("ערך startxref אינו תקין"))?;
-    let xref_type = rfind_xref_type(&tail[..startxref_marker])
+    let xref_type = rfind(&tail[..startxref_marker], b"/Type /XRef")
         .ok_or(ConversionError::InvalidBkc("XRef פיזי לא נמצא"))?;
-    let object_line_start = find_object_start(&tail[..xref_type])
-        .ok_or(ConversionError::InvalidBkc("תחילת אובייקט XRef לא נמצאה"))?;
+    let object_line_end = rfind(&tail[..xref_type], b" obj\n")
+        .ok_or(ConversionError::InvalidBkc("תחילת אובייקט XRef לא נמצאה"))? + 5;
+    let object_line_start = tail[..object_line_end - 1].iter()
+        .rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
     let physical_xref = tail_start + object_line_start as u64;
     let base_offset = physical_xref.checked_sub(startxref)
         .ok_or(ConversionError::InvalidBkc("היסט XRef שלילי"))?;
@@ -124,7 +129,14 @@ where
     source.seek(SeekFrom::Start(base_offset))?;
     let mut encoded = [0_u8; PREFIX_LEN];
     source.read_exact(&mut encoded)?;
-    let profile = select_profile(&encoded)?;
+    let profile = select_profile(&encoded);
+    if profile.is_err() {
+        return repair_bkc_with_ghostscript(
+            &mut source, input_size, base_offset, startxref, physical_xref,
+            output, progress, cancelled,
+        );
+    }
+    let profile = profile?;
     let mut decoded = encoded;
     for (byte, mask) in decoded.iter_mut().zip(profile.mask) { *byte ^= mask; }
     if !decoded.starts_with(b"%PDF-") {
@@ -159,6 +171,93 @@ where
     })();
     if conversion.is_err() { let _ = fs::remove_file(&temporary); }
     conversion
+}
+
+fn repair_bkc_with_ghostscript<P, C>(
+    source: &mut File,
+    input_size: u64,
+    base_offset: u64,
+    original_startxref: u64,
+    physical_xref: u64,
+    output: &Path,
+    mut progress: P,
+    cancelled: C,
+) -> Result<ConversionReport, ConversionError>
+where
+    P: FnMut(u64),
+    C: Fn() -> bool,
+{
+    if cancelled() { return Err(ConversionError::Cancelled); }
+    let probe = temporary_path(&output.with_extension("probe.pdf"));
+    let repaired = temporary_path(output);
+    let result = (|| -> Result<ConversionReport, ConversionError> {
+        let mut writer = BufWriter::with_capacity(
+            COPY_BUFFER,
+            OpenOptions::new().write(true).create_new(true).open(&probe)?,
+        );
+        const PDF_HEADER: &[u8] = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n";
+        writer.write_all(PDF_HEADER)?;
+        writer.write_all(&vec![b' '; PREFIX_LEN - PDF_HEADER.len()])?;
+        source.seek(SeekFrom::Start(base_offset + PREFIX_LEN as u64))?;
+        let mut buffer = vec![0_u8; COPY_BUFFER];
+        loop {
+            if cancelled() { return Err(ConversionError::Cancelled); }
+            let read = source.read(&mut buffer)?;
+            if read == 0 { break; }
+            writer.write_all(&buffer[..read])?;
+            progress(source.stream_position()?.saturating_sub(base_offset));
+        }
+        writer.flush()?;
+        writer.get_ref().sync_all()?;
+        drop(writer);
+
+        let executable = std::env::var_os("BKF_AI_GS_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("gs"));
+        let status = Command::new(&executable)
+            .arg("-q").arg("-dNOPAUSE").arg("-dBATCH")
+            .arg("-sDEVICE=pdfwrite")
+            .arg(format!("-sOutputFile={}", repaired.display()))
+            .arg(&probe)
+            .status()
+            .map_err(|error| ConversionError::RepairUnavailable(format!("{} ({error})", executable.display())))?;
+        if !status.success() {
+            return Err(ConversionError::RepairUnavailable(format!("Ghostscript exited with {status}")));
+        }
+        if cancelled() { return Err(ConversionError::Cancelled); }
+        let repaired_startxref = read_pdf_startxref(&repaired)?;
+        let (output_size, page_count, sha256) = validate_pdf(&repaired, repaired_startxref)?;
+        fs::rename(&repaired, output)?;
+        progress(input_size.saturating_sub(base_offset));
+        Ok(ConversionReport {
+            decoder_profile: "bkc-ghostscript-repair-v1".into(),
+            base_offset,
+            startxref: original_startxref,
+            physical_xref,
+            output_size,
+            page_count,
+            sha256,
+        })
+    })();
+    let _ = fs::remove_file(&probe);
+    if result.is_err() { let _ = fs::remove_file(&repaired); }
+    result
+}
+
+fn read_pdf_startxref(path: &Path) -> Result<u64, ConversionError> {
+    let mut file = File::open(path)?;
+    let size = file.metadata()?.len();
+    let start = size.saturating_sub(TAIL_WINDOW);
+    file.seek(SeekFrom::Start(start))?;
+    let mut tail = Vec::new();
+    file.read_to_end(&mut tail)?;
+    let marker = rfind(&tail, b"startxref")
+        .ok_or_else(|| ConversionError::InvalidPdf("startxref חסר לאחר תיקון".into()))?;
+    let rest = &tail[marker + b"startxref".len()..];
+    let first_digit = rest.iter().position(u8::is_ascii_digit)
+        .ok_or_else(|| ConversionError::InvalidPdf("ערך startxref חסר".into()))?;
+    parse_decimal_line(&rest[first_digit..])
+        .ok_or_else(|| ConversionError::InvalidPdf("ערך startxref אינו תקין".into()))
 }
 
 fn select_profile(encoded: &[u8; PREFIX_LEN]) -> Result<DecoderProfile, ConversionError> {
@@ -199,7 +298,8 @@ fn validate_pdf(path: &Path, expected_startxref: u64) -> Result<(u64, u64, Strin
     check.seek(SeekFrom::Start(expected_startxref))?;
     let mut xref = [0_u8; 4096];
     let read = check.read(&mut xref)?;
-    if rfind_xref_type(&xref[..read]).is_none() {
+    let xref_bytes = &xref[..read];
+    if !contains(xref_bytes, b"/Type /XRef") && !xref_bytes.starts_with(b"xref") {
         return Err(ConversionError::InvalidPdf("startxref אינו מצביע ל־XRef".into()));
     }
     let tail_len = size.min(1024);
@@ -227,26 +327,8 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 fn contains(haystack: &[u8], needle: &[u8]) -> bool { rfind(haystack, needle).is_some() }
 fn parse_decimal_line(bytes: &[u8]) -> Option<u64> {
-    let start = bytes.iter().position(|byte| !byte.is_ascii_whitespace())?;
-    let digits = &bytes[start..];
-    let end = digits.iter().position(|byte| !byte.is_ascii_digit()).unwrap_or(digits.len());
-    if end == 0 { return None; }
-    std::str::from_utf8(&digits[..end]).ok()?.parse().ok()
-}
-
-fn rfind_xref_type(bytes: &[u8]) -> Option<usize> {
-    bytes.windows(b"/Type".len()).enumerate().filter_map(|(index, window)| {
-        if window != b"/Type" { return None; }
-        let rest = &bytes[index + b"/Type".len()..];
-        let start = rest.iter().position(|byte| !byte.is_ascii_whitespace())?;
-        rest[start..].starts_with(b"/XRef").then_some(index)
-    }).last()
-}
-
-fn find_object_start(bytes: &[u8]) -> Option<usize> {
-    let obj = rfind(bytes, b" obj")?;
-    let line_start = bytes[..obj].iter().rposition(|byte| matches!(byte, b'\n' | b'\r')).map_or(0, |i| i + 1);
-    bytes[line_start..obj].iter().all(|byte| byte.is_ascii_digit() || byte.is_ascii_whitespace()).then_some(line_start)
+    let end = bytes.iter().position(|byte| !byte.is_ascii_digit()).unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..end]).ok()?.parse().ok()
 }
 fn decode_hex(value: &str) -> Option<Vec<u8>> {
     if value.len() % 2 != 0 { return None; }
@@ -271,12 +353,6 @@ mod tests {
     #[test]
     fn rejects_unknown_decoder_profile() {
         assert!(matches!(select_profile(&[0_u8; PREFIX_LEN]), Err(ConversionError::UnknownDecoderProfile)));
-    }
-    #[test]
-    fn accepts_crlf_and_compact_xref_syntax() {
-        assert_eq!(parse_decimal_line(b"\r\n19726749\r\n"), Some(19_726_749));
-        assert_eq!(rfind_xref_type(b"<</Type/XRef/Length 4>>"), Some(2));
-        assert_eq!(find_object_start(b"data\r9225 0 obj\r<</Type/XRef>>"), Some(5));
     }
     #[test]
     fn never_converts_bkf() {

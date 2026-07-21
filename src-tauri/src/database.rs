@@ -198,26 +198,22 @@ pub fn list_items(
     offset: u64,
     limit: u64,
     name_query: &str,
-    file_type: &str,
 ) -> rusqlite::Result<LibraryPage> {
     let pattern = format!("%{}%", escape_like(name_query));
-    let type_filter = if matches!(file_type, "BKC" | "BKF" | "Unknown") { file_type } else { "" };
     let total = connection.query_row(
         "SELECT COUNT(*) FROM library_items
-         WHERE scan_id=?1 AND name LIKE ?2 ESCAPE '\\' COLLATE NOCASE
-           AND (?3 = '' OR file_type = ?3)",
-        params![scan_id, pattern, type_filter],
+         WHERE scan_id=?1 AND name LIKE ?2 ESCAPE '\\' COLLATE NOCASE",
+        params![scan_id, pattern],
         |row| row.get::<_, i64>(0),
     )? as u64;
     let mut statement = connection.prepare(
         "SELECT name, relative_path, size, file_type, modified_ms, status, selected
          FROM library_items
          WHERE scan_id=?1 AND name LIKE ?2 ESCAPE '\\' COLLATE NOCASE
-           AND (?3 = '' OR file_type = ?3)
-         ORDER BY relative_path COLLATE NOCASE LIMIT ?4 OFFSET ?5",
+         ORDER BY relative_path COLLATE NOCASE LIMIT ?3 OFFSET ?4",
     )?;
     let items = statement
-        .query_map(params![scan_id, pattern, type_filter, limit as i64, offset as i64], |row| {
+        .query_map(params![scan_id, pattern, limit as i64, offset as i64], |row| {
             Ok(LibraryItem {
                 name: row.get(0)?,
                 relative_path: row.get(1)?,
@@ -298,15 +294,12 @@ mod tests {
                 .collect();
             insert_batch(&mut connection, "scan-1", &items).unwrap();
         }
-        let page = list_items(&connection, "scan-1", 9_950, 100, "", "").unwrap();
+        let page = list_items(&connection, "scan-1", 9_950, 100, "").unwrap();
         assert_eq!(page.total, 10_000);
         assert_eq!(page.items.len(), 50);
         assert_eq!(page.items[0].relative_path, "תיקייה/09950.book");
-        let filtered = list_items(&connection, "scan-1", 0, 100, "ספר 9999", "").unwrap();
+        let filtered = list_items(&connection, "scan-1", 0, 100, "ספר 9999").unwrap();
         assert_eq!(filtered.total, 1);
         assert_eq!(filtered.items[0].name, "ספר 9999.book");
-        let bkc_only = list_items(&connection, "scan-1", 0, 10_000, "", "BKC").unwrap();
-        assert_eq!(bkc_only.total, 5_000);
-        assert!(bkc_only.items.iter().all(|item| item.file_type == "BKC"));
     }
 }
