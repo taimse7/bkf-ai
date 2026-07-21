@@ -60,3 +60,18 @@ Status: implemented and core-tested; native Tauri integration build on macOS is 
   `src-tauri/icons/icon.png` asset was missing.
 - A complete Tauri icon set was then generated from `app-icon.svg`; the native run must be
   repeated before stage 2 can be marked complete.
+
+## Stage 3 — Verified BKC Conversion Engine
+
+Status: implemented and verified against the supplied golden files.
+
+- Filename search filters the virtual library through paged SQLite queries.
+- The conversion engine is a standalone Rust core; no JavaScript decoding is used.
+- BKC is required by magic bytes. BKF and unknown variants are rejected.
+- `startxref`, the physical XRef object, and `baseOffset` are discovered from file structure.
+- Decoder profile `bkc-golden-674817-v1` is selected only for the verified prefix fingerprint.
+- Output is streamed to a temporary file, validated, synced, and atomically renamed after success.
+- Golden result: `baseOffset=7105`, output size `115172663`, page count `506`, SHA-256
+  `030B0E2B93270B96EF24D63F1C5254D41BA2B54C9E0232C428F2D9E254E3B165`.
+- Streaming binary comparison against `674817_recovered.pdf`: identical.
+- No BKF conversion was added.

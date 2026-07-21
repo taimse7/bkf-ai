@@ -33,6 +33,11 @@ h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
 .error-banner { max-width: 1500px; margin: 0 auto 14px; padding: 12px 16px; color: #8b252b; background: #fff0f0; border: 1px solid #efc5c7; border-radius: 11px; }
 
 .library-card { overflow: hidden; }
+.library-tools { display: flex; align-items: center; gap: 12px; padding: 12px 15px; border-bottom: 1px solid #dce5e8; background: white; }
+.library-tools label { color: #526673; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.library-tools input { width: min(420px, 55vw); height: 38px; padding: 0 12px; color: #172b3a; background: #f8fafb; border: 1px solid #cbd7dc; border-radius: 10px; outline: none; }
+.library-tools input:focus { border-color: #176e83; box-shadow: 0 0 0 3px rgba(23,110,131,.12); }
+.library-tools span { color: #667985; font-size: 12px; }
 .library-header, .library-row { display: grid; grid-template-columns: 64px minmax(160px,1.2fr) minmax(230px,2fr) 90px 85px 155px 130px; align-items: center; gap: 12px; padding-inline: 15px; }
 .library-header { height: 46px; color: #526673; background: #f6f8f9; border-bottom: 1px solid #dce5e8; font-size: 12px; font-weight: 800; }
 .virtual-viewport { position: relative; height: min(62vh, 670px); min-height: 360px; overflow: auto; overscroll-behavior: contain; }

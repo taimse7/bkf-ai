@@ -73,10 +73,12 @@ function App() {
   const [viewportHeight, setViewportHeight] = useState(520);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nameQuery, setNameQuery] = useState("");
   const viewportRef = useRef<HTMLDivElement>(null);
+  const queryRef = useRef("");
   const loadedPages = useRef(new Set<number>());
 
-  const loadPage = useCallback(async (scanId: string, offset: number, force = false) => {
+  const loadPage = useCallback(async (scanId: string, offset: number, query: string, force = false) => {
     const pageOffset = Math.floor(offset / PAGE_SIZE) * PAGE_SIZE;
     if (!force && loadedPages.current.has(pageOffset)) return;
     loadedPages.current.add(pageOffset);
@@ -85,7 +87,9 @@ function App() {
         scanId,
         offset: pageOffset,
         limit: PAGE_SIZE,
+        nameQuery: query,
       });
+      if (query !== queryRef.current) return;
       setTotal(page.total);
       setItems((current) => {
         const next = new Map(current);
@@ -103,7 +107,9 @@ function App() {
     setItems(new Map());
     setTotal(0);
     loadedPages.current.clear();
-    void loadPage(scan.id, 0, true);
+    queryRef.current = "";
+    setNameQuery("");
+    void loadPage(scan.id, 0, "", true);
   }, [loadPage]);
 
   useEffect(() => {
@@ -129,7 +135,7 @@ function App() {
       if (payload.scanned % 1000 === 0 || payload.status !== "running") {
         loadedPages.current.clear();
         setRun((current) => {
-          if (current?.id === payload.scanId) void loadPage(current.id, 0, true);
+          if (current?.id === payload.scanId) void loadPage(current.id, 0, queryRef.current, true);
           return current;
         });
       }
@@ -154,8 +160,22 @@ function App() {
   );
 
   useEffect(() => {
-    if (run && total > 0) void loadPage(run.id, range.start);
+    if (run && total > 0) void loadPage(run.id, range.start, queryRef.current);
   }, [loadPage, range.start, run, total]);
+
+  useEffect(() => {
+    queryRef.current = nameQuery;
+    if (!run) return;
+    const timer = window.setTimeout(() => {
+      loadedPages.current.clear();
+      setItems(new Map());
+      setTotal(0);
+      setScrollTop(0);
+      if (viewportRef.current) viewportRef.current.scrollTop = 0;
+      void loadPage(run.id, 0, nameQuery, true);
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [loadPage, nameQuery, run?.id]);
 
   const chooseSource = async () => {
     setError(null);
@@ -246,6 +266,13 @@ function App() {
       {error && <div className="error-banner" role="alert">{error}</div>}
 
       <section className="library-card" aria-label="רשימת קבצים">
+        <div className="library-tools">
+          <label htmlFor="library-search">חיפוש לפי שם</label>
+          <input id="library-search" type="search" value={nameQuery}
+            onChange={(event) => setNameQuery(event.target.value)}
+            placeholder="הקלד שם קובץ…" disabled={!run} dir="auto" />
+          {nameQuery && <span>{total.toLocaleString("he-IL")} תוצאות</span>}
+        </div>
         <div className="library-header">
           <span>סימון</span><span>שם</span><span>נתיב יחסי</span><span>גודל</span>
           <span>סוג</span><span>תאריך שינוי</span><span>סטטוס</span>

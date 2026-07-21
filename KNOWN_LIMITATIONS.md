@@ -1,7 +1,7 @@
 # Known Limitations
 
-- This is a build proof, not a usable BKC/BKF conversion product.
-- BKC reading and conversion are not implemented yet.
+- BKC conversion currently supports only the decoder profile verified by `674817.book`.
+  Other BKC variants are rejected rather than guessed.
 - Full BKF decoding is not implemented or claimed.
 - The generated macOS app is unsigned and not notarized, so Gatekeeper may warn when it is downloaded to another Mac.
 - The CI artifact is built only for Apple Silicon (`aarch64-apple-darwin`), not Intel Macs.
@@ -23,8 +23,9 @@
   the SQLite database can never be written inside the selected source tree.
 - Permission errors and disconnection paths are implemented, but physical drive removal and
   macOS privacy-permission behavior require validation on an actual Mac.
-- The virtual library uses fixed-height rows and paged queries; search, sorting controls, and
-  filtering are outside stage 2.
-- This stage does not convert, decode, preview, or export BKC/BKF content.
+- The virtual library uses fixed-height rows and paged queries. Filename search is implemented;
+  sorting controls and additional filters are not.
+- The golden fixtures are external test inputs and are not committed to Git because together they
+  are about 230 MB. The ignored integration test must be invoked explicitly with `BKF_GOLDEN_DIR`.
 - The first native macOS workflow exposed a missing Tauri icon and therefore did not reach app/DMG
   bundling. Icons are now included, but the corrected native workflow has not yet run.

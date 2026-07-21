@@ -189,19 +189,23 @@ pub fn list_items(
     scan_id: &str,
     offset: u64,
     limit: u64,
+    name_query: &str,
 ) -> rusqlite::Result<LibraryPage> {
+    let pattern = format!("%{}%", escape_like(name_query));
     let total = connection.query_row(
-        "SELECT COUNT(*) FROM library_items WHERE scan_id=?1",
-        [scan_id],
+        "SELECT COUNT(*) FROM library_items
+         WHERE scan_id=?1 AND name LIKE ?2 ESCAPE '\\' COLLATE NOCASE",
+        params![scan_id, pattern],
         |row| row.get::<_, i64>(0),
     )? as u64;
     let mut statement = connection.prepare(
         "SELECT name, relative_path, size, file_type, modified_ms, status, selected
-         FROM library_items WHERE scan_id=?1
-         ORDER BY relative_path COLLATE NOCASE LIMIT ?2 OFFSET ?3",
+         FROM library_items
+         WHERE scan_id=?1 AND name LIKE ?2 ESCAPE '\\' COLLATE NOCASE
+         ORDER BY relative_path COLLATE NOCASE LIMIT ?3 OFFSET ?4",
     )?;
     let items = statement
-        .query_map(params![scan_id, limit as i64, offset as i64], |row| {
+        .query_map(params![scan_id, pattern, limit as i64, offset as i64], |row| {
             Ok(LibraryItem {
                 name: row.get(0)?,
                 relative_path: row.get(1)?,
@@ -218,6 +222,10 @@ pub fn list_items(
         total,
         offset,
     })
+}
+
+fn escape_like(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
 pub fn set_selected(
@@ -257,9 +265,12 @@ mod tests {
                 .collect();
             insert_batch(&mut connection, "scan-1", &items).unwrap();
         }
-        let page = list_items(&connection, "scan-1", 9_950, 100).unwrap();
+        let page = list_items(&connection, "scan-1", 9_950, 100, "").unwrap();
         assert_eq!(page.total, 10_000);
         assert_eq!(page.items.len(), 50);
         assert_eq!(page.items[0].relative_path, "תיקייה/09950.book");
+        let filtered = list_items(&connection, "scan-1", 0, 100, "ספר 9999").unwrap();
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.items[0].name, "ספר 9999.book");
     }
 }

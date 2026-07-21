@@ -18,6 +18,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bkf-converter-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2",
+ "uuid",
+]
+
+[[package]]
+name = "bkf-scanner-core"
+version = "0.1.0"
+dependencies = [
+ "rusqlite",
+ "serde",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -128,6 +145,8 @@ dependencies = [
 name = "bkf-ai"
 version = "0.1.0"
 dependencies = [
+ "bkf-converter-core",
+ "bkf-scanner-core",
  "rusqlite",
  "serde",
  "serde_json",

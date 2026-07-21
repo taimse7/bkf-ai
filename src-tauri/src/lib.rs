@@ -1,5 +1,6 @@
 mod scanner;
 
+use bkf_converter_core::{convert_bkc, ConversionReport};
 use bkf_scanner_core::database::{init_database, last_scan, list_items, set_selected};
 use bkf_scanner_core::models::{LibraryPage, ScanRun};
 use scanner::{spawn_scan, ScanState};
@@ -80,11 +81,25 @@ fn get_library_page(
     scan_id: String,
     offset: u64,
     limit: u64,
+    name_query: String,
     app: AppHandle,
 ) -> Result<LibraryPage, String> {
     let path = database_path(&app).map_err(|error| error.to_string())?;
     let connection = init_database(&path).map_err(|error| error.to_string())?;
-    list_items(&connection, &scan_id, offset, limit.min(500)).map_err(|error| error.to_string())
+    list_items(&connection, &scan_id, offset, limit.min(500), &name_query)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn convert_verified_bkc(
+    input_path: String,
+    output_path: String,
+) -> Result<ConversionReport, String> {
+    convert_bkc(
+        PathBuf::from(input_path).as_path(),
+        PathBuf::from(output_path).as_path(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -116,7 +131,8 @@ pub fn run() {
             get_last_scan,
             resume_last_scan,
             get_library_page,
-            update_selected
+            update_selected,
+            convert_verified_bkc
         ])
         .run(tauri::generate_context!())
         .expect("error while running BKF AI");
