@@ -114,6 +114,35 @@ fn probe_book_structure(input_path: String) -> Result<ProbeReport, String> {
 }
 
 #[tauri::command]
+fn export_probe_report(input_path: String, output_path: String) -> Result<(), String> {
+    let input = PathBuf::from(&input_path)
+        .canonicalize()
+        .map_err(|error| format!("קובץ המקור אינו זמין: {error}"))?;
+    if !input.is_file() {
+        return Err("המקור שנבחר אינו קובץ".into());
+    }
+    let report = probe_path(&input).map_err(|error| error.to_string())?;
+    let document = serde_json::json!({
+        "schemaVersion": 1,
+        "application": "BKF AI",
+        "generatedAtUnixMs": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis()),
+        "source": {
+            "name": input.file_name().and_then(|name| name.to_str()).unwrap_or(""),
+            "size": report.file_size,
+        },
+        "probe": report,
+        "scope": "structural-analysis-only",
+    });
+    fs::write(
+        &output_path,
+        serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("לא ניתן לשמור את דוח המבנה: {error}"))
+}
+
+#[tauri::command]
 fn enqueue_conversions(
     scan_id: String,
     relative_paths: Vec<String>,
@@ -230,6 +259,7 @@ pub fn run() {
             get_library_page,
             update_selected,
             probe_book_structure,
+            export_probe_report,
             convert_verified_bkc,
             enqueue_conversions,
             get_conversion_queue,

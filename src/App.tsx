@@ -61,10 +61,16 @@ interface ProbeReport {
     pageIndexStatus: string;
   } | null;
   decoderAvailable: boolean;
+  evidence: Array<{
+    status: "proven" | "hypothesis" | "unknown";
+    key: string;
+    detail: string;
+  }>;
 }
 
 interface ProbeSelection {
   name: string;
+  inputPath: string;
   report: ProbeReport;
 }
 
@@ -292,11 +298,27 @@ function App() {
       const report = await invoke<ProbeReport>("probe_book_structure", {
         inputPath: `${run.rootPath}${separator}${item.relativePath}`,
       });
-      setProbe({ name: item.name, report });
+      setProbe({ name: item.name, inputPath: `${run.rootPath}${separator}${item.relativePath}`, report });
     } catch (reason) {
       showFriendlyError(reason);
     } finally {
       setProbingPath(null);
+    }
+  };
+
+  const exportProbe = async () => {
+    if (!probe) return;
+    const safeName = probe.name.replace(/[^\p{L}\p{N}._-]+/gu, "-");
+    const target = await save({
+      title: "שמירת דוח בדיקת מבנה",
+      defaultPath: `${safeName}.probe.json`,
+    });
+    if (!target) return;
+    try {
+      await invoke("export_probe_report", { inputPath: probe.inputPath, outputPath: target });
+      setError(null);
+    } catch (reason) {
+      showFriendlyError(reason);
     }
   };
 
@@ -400,7 +422,10 @@ function App() {
         {probe && <div className={`probe-panel probe-${probe.report.kind}`} aria-live="polite">
           <div className="probe-heading">
             <div><span className="label">תוצאת Probe מה־Rust backend</span><strong dir="auto">{probe.name}</strong></div>
-            <span className={`type type-${probe.report.kind}`}>{probe.report.kind.toUpperCase()}</span>
+            <div className="probe-actions">
+              <button className="row-action" onClick={() => void exportProbe()}>הורדת דוח JSON</button>
+              <span className={`type type-${probe.report.kind}`}>{probe.report.kind.toUpperCase()}</span>
+            </div>
           </div>
           <dl className="probe-values">
             <div><dt>גודל</dt><dd dir="ltr">{formatSize(probe.report.fileSize)}</dd></div>
@@ -416,6 +441,15 @@ function App() {
               <div><dt>חתימת DjVu גלויה</dt><dd>{probe.report.bkf.standardDjvuSignatureVisible ? "כן" : "לא"}</dd></div>
             </>}
           </dl>
+          {probe.report.evidence.length > 0 && <details className="probe-evidence">
+            <summary>ראיות ומגבלות ({probe.report.evidence.length})</summary>
+            <ul>
+              {probe.report.evidence.map((item, index) =>
+                <li key={`${item.key}-${index}`} data-status={item.status}>
+                  <strong dir="ltr">{item.key}</strong>: {item.detail}
+                </li>)}
+            </ul>
+          </details>}
           {!probe.report.decoderAvailable && <p className="probe-warning">
             {probe.report.kind === "bkf"
               ? "הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. הוא לא יישלח למנוע ההמרה."

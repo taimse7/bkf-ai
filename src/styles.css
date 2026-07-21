@@ -42,11 +42,17 @@ h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
 .link-button, .row-action, .job-actions button { padding: 6px 10px; color: #176e83; background: white; border: 1px solid #b9ced5; border-radius: 8px; }
 .probe-panel { margin-top: 14px; padding: 14px; background: #f6f9fa; border: 1px solid #cddde2; border-radius: 12px; }
 .probe-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.probe-actions { display: flex; align-items: center; gap: 8px; }
 .probe-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin: 12px 0 0; }
 .probe-values > div { padding: 9px 11px; background: white; border-radius: 8px; }
 .probe-values dt { color: #667985; font-size: 11px; }
 .probe-values dd { margin: 3px 0 0; font-weight: 800; }
 .probe-warning { margin: 12px 0 0; color: #774c11; font-size: 13px; }
+.probe-evidence { margin-top: 12px; padding: 10px 12px; background: white; border-radius: 8px; font-size: 12px; }
+.probe-evidence summary { color: #365565; cursor: pointer; font-weight: 800; }
+.probe-evidence ul { margin: 9px 0 0; padding-inline-start: 20px; }
+.probe-evidence li { margin-top: 5px; color: #526673; }
+.probe-evidence li[data-status="unknown"] { color: #774c11; }
 .queue-summary { margin-top: 16px; padding: 15px; background: #f6f9fa; border: 1px solid #dce5e8; border-radius: 12px; }
 .overall-progress { padding: 0; }
 .overall-progress progress { flex: 1; height: 13px; accent-color: #176e83; }

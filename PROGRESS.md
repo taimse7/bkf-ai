@@ -189,3 +189,24 @@ Status: implemented; frontend verified locally, updated native macOS build pendi
 - `git diff --check`: passed.
 - Native validation required after upload: probing `688840.book` must display BKC with
   `baseOffset=13643`, `startxref=19726749`, and `physicalXref=19740392`.
+
+## Engine redevelopment — Step 2.2: Safe structural report export
+
+Status: implemented; frontend verified locally, native Rust validation pending.
+
+- Continued without runtime hooking, process injection, drive-auth inspection, or interception of
+  decoder buffers.
+- Added a Rust-owned `export_probe_report` command that re-runs the structural probe and writes a
+  versioned JSON report. The frontend cannot manufacture or modify the reported probe result.
+- Reports contain only the source filename and size, structural findings, evidence classifications,
+  decoder availability and an explicit `structural-analysis-only` scope.
+- Added an expandable evidence/limitations section and a “הורדת דוח JSON” action to the probe UI.
+- No decoding, decryption, authorization, or conversion support claim changed in this step.
+
+### Step 2.2 verification recorded
+
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- `git diff --check`: passed.
+- The current host still has no Rust toolchain; the registered Tauri command must compile in the
+  next native GitHub Actions run before this step is considered natively verified.

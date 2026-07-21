@@ -55,3 +55,5 @@
 - The new Probe result panel is frontend-verified but still requires one native macOS run after the
   updated source is uploaded. The preceding GitHub Actions run successfully built the probe backend,
   but it did not contain this UI connection.
+- Structural JSON reports intentionally contain no decoded content, keys, device identifiers or
+  runtime data. They cannot add support for an unknown BKC/BKF decoder profile.
