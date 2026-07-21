@@ -245,9 +245,13 @@ function App() {
     } catch (reason) { showFriendlyError(reason); }
   };
 
-  const retry = async (id: string) => {
-    try { setQueue(await invoke<ConversionJob[]>("retry_conversion", { id })); }
-    catch (reason) { showFriendlyError(reason); }
+  const retryFailed = async () => {
+    const failed = queue.filter((job) => ["failed", "cancelled", "disconnected"].includes(job.status));
+    try {
+      for (const job of failed) {
+        await invoke<ConversionJob[]>("retry_conversion", { id: job.id });
+      }
+    } catch (reason) { showFriendlyError(reason); }
   };
 
   const openPath = async (path: string) => {
@@ -295,6 +299,11 @@ function App() {
   }
 
   const isRunning = run?.status === "running";
+  const activeConversion = queue.find((job) => job.status === "running");
+  const completedConversions = queue.filter((job) => job.status === "completed");
+  const finishedConversions = queue.filter((job) => ["completed", "skipped", "unsupported", "failed", "cancelled", "disconnected"].includes(job.status));
+  const failedConversions = queue.filter((job) => ["failed", "cancelled", "disconnected"].includes(job.status));
+  const lastCompleted = completedConversions.at(-1);
 
   return (
     <main className="app-shell">
@@ -342,24 +351,26 @@ function App() {
           {destination && <button className="link-button" onClick={() => void openPath(destination)}>פתיחת תיקיית היעד</button>}
         </div>
         <p className="bkf-warning">הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. קובצי BKF אינם נשלחים למנוע ההמרה.</p>
-        {queue.length > 0 && <>
+        {queue.length > 0 && <div className="queue-summary" aria-live="polite">
           <div className="overall-progress">
-            <span>התקדמות כוללת</span>
-            <progress value={queue.reduce((sum, job) => sum + job.processedBytes, 0)} max={Math.max(1, queue.reduce((sum, job) => sum + job.totalBytes, 0))} />
-            <strong>{queue.filter((job) => ["completed", "skipped", "unsupported"].includes(job.status)).length}/{queue.length}</strong>
-          </div>
-          <div className="queue-list">{queue.map((job) => <article className="queue-job" key={job.id}>
-            <div><strong dir="auto">{job.name}</strong><span>{job.status === "running" ? "ממיר" : (statusLabels[job.status] ?? job.status)}</span></div>
-            <progress value={job.processedBytes} max={Math.max(1, job.totalBytes)} />
-            <span>{formatSize(job.processedBytes)} / {formatSize(job.totalBytes)}</span>
-            <div className="job-actions">
-              {job.status === "completed" && <button onClick={() => void openPath(job.outputPath)}>פתיחת ה־PDF</button>}
-              {(["failed", "cancelled", "disconnected"].includes(job.status)) && <button onClick={() => void retry(job.id)}>ניסיון חוזר</button>}
-              {job.technicalReport && job.status !== "completed" && <button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button>}
+            <div className="progress-copy">
+              <strong>{activeConversion ? `ממיר כעת: ${activeConversion.name}` : "סיכום ההמרה"}</strong>
+              <span>{finishedConversions.length} מתוך {queue.length} הסתיימו</span>
             </div>
-            {job.error && <p className="job-error">ההמרה לא הושלמה. ניתן לנסות שוב או להוריד קובץ אבחון.</p>}
-          </article>)}</div>
-        </>}
+            <progress value={queue.reduce((sum, job) => sum + job.processedBytes, 0)} max={Math.max(1, queue.reduce((sum, job) => sum + job.totalBytes, 0))} />
+            <strong>{finishedConversions.length}/{queue.length}</strong>
+          </div>
+          <div className="conversion-results">
+            <span className="result-success">{completedConversions.length} הומרו</span>
+            {queue.some((job) => job.status === "skipped") && <span>{queue.filter((job) => job.status === "skipped").length} דולגו</span>}
+            {failedConversions.length > 0 && <span className="result-failed">{failedConversions.length} לא הושלמו</span>}
+            <div className="summary-actions">
+              {lastCompleted && <button onClick={() => void openPath(lastCompleted.outputPath)}>פתיחת ה־PDF האחרון</button>}
+              {failedConversions.length > 0 && <button onClick={() => void retryFailed()}>ניסיון חוזר לנכשלים</button>}
+              {failedConversions.length > 0 && <button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button>}
+            </div>
+          </div>
+        </div>}
       </section>
 
       <section className="library-card" aria-label="רשימת קבצים">

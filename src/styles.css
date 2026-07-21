@@ -41,17 +41,17 @@ h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
 .destination-row label { white-space: nowrap; }
 .link-button, .row-action, .job-actions button { padding: 6px 10px; color: #176e83; background: white; border: 1px solid #b9ced5; border-radius: 8px; }
 .bkf-warning { margin: 12px 0 0; color: #774c11; font-size: 13px; }
-.overall-progress { margin-top: 16px; padding-top: 14px; border-top: 1px solid #dce5e8; }
+.queue-summary { margin-top: 16px; padding: 15px; background: #f6f9fa; border: 1px solid #dce5e8; border-radius: 12px; }
+.overall-progress { padding: 0; }
 .overall-progress progress { flex: 1; height: 13px; accent-color: #176e83; }
-.queue-list { display: grid; gap: 9px; margin-top: 12px; }
-.queue-job { display: grid; grid-template-columns: minmax(180px,1.4fr) minmax(180px,2fr) 170px minmax(140px,1fr); align-items: center; gap: 12px; padding: 11px; border: 1px solid #dce5e8; border-radius: 10px; }
-.queue-job > div:first-child { display: grid; gap: 3px; }
-.queue-job > div:first-child span { color: #657985; font-size: 12px; }
-.queue-job progress { width: 100%; accent-color: #176e83; }
-.job-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-.job-actions details { width: 100%; }
-.job-actions pre { max-height: 180px; overflow: auto; padding: 8px; background: #f4f6f7; border-radius: 6px; font-size: 11px; white-space: pre-wrap; }
-.job-error { grid-column: 1 / -1; margin: 0; color: #a13137; font-size: 12px; }
+.progress-copy { display: grid; min-width: 190px; gap: 3px; }
+.progress-copy span { color: #657985; font-size: 12px; }
+.conversion-results { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #dce5e8; }
+.conversion-results > span { padding: 5px 9px; color: #526673; background: white; border-radius: 999px; font-size: 12px; }
+.conversion-results .result-success { color: #217047; }
+.conversion-results .result-failed { color: #a13137; }
+.summary-actions { display: flex; gap: 7px; margin-inline-start: auto; }
+.summary-actions button { padding: 6px 10px; color: #176e83; background: white; border: 1px solid #b9ced5; border-radius: 8px; }
 .library-card { overflow: hidden; }
 .library-tools { display: flex; align-items: center; gap: 12px; padding: 12px 15px; border-bottom: 1px solid #dce5e8; background: white; }
 .library-tools label { color: #526673; font-size: 12px; font-weight: 800; white-space: nowrap; }
@@ -85,5 +85,7 @@ h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
   .library-header, .library-row { grid-template-columns: 54px 170px minmax(200px,1fr) 80px 65px 130px 100px 80px; }
   .topbar, .source-card { align-items: flex-start; }
   .conversion-heading { align-items: flex-start; }
-  .queue-job { grid-template-columns: 1fr; }
+  .overall-progress { align-items: flex-start; flex-wrap: wrap; }
+  .overall-progress progress { flex-basis: 100%; order: 3; }
+  .summary-actions { margin-inline-start: 0; }
 }

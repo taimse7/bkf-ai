@@ -100,11 +100,15 @@ Status: implemented; frontend verified locally, native macOS build pending GitHu
 - Failed/cancelled/disconnected jobs can be retried and retain a technical report.
 - BKF rows display: “הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.” They never enter the converter.
 - Paths, sizes and progress use `u64`, and the engine remains streaming for files above 4 GB.
+- The full per-file conversion-card list was removed from the main screen. Conversion jobs still
+  run and persist in Rust, while the UI shows one compact aggregate progress panel, result counts,
+  retry for all failed jobs, the last completed PDF action, and diagnostics download.
 
 ### Stage 4 verification recorded
 
 - `pnpm test`: passed, 2 tests.
 - `pnpm build`: passed, TypeScript compiled and Vite transformed 21 modules.
+- Compact queue UI follow-up: `pnpm test` passed 2 tests and `pnpm build` passed on 2026-07-21.
 - Rust tests could not be executed on this restored Linux workspace because no Rust toolchain is
   installed. New Rust tests cover existing-file skip/rename, Hebrew filenames, BKF rejection, and
   queue recovery after reopening; they must run in the native GitHub Actions build.
