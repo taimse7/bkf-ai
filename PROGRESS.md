@@ -137,7 +137,8 @@ Status: complete and locally verified.
 
 ## Engine redevelopment — Step 2: Container probe and structural parsers
 
-Status: implemented; real-sample structural evidence passed, Rust compilation pending.
+Status: implemented; real-sample evidence passed and the Rust build was reported successful in the
+uploaded GitHub Actions run.
 
 - Added a standalone `bkf-container-probe` Rust crate inside the existing Tauri project.
 - Registered it as a dependency of the existing Tauri backend and exposed the read-only
@@ -164,5 +165,27 @@ Status: implemented; real-sample structural evidence passed, Rust compilation pe
 - `pnpm test`: passed, 2/2 tests.
 - `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
 - `git diff --check`: passed.
-- `cargo test --manifest-path src-tauri/container-probe/Cargo.toml`: not run. Neither `cargo` nor
-  `rustc` is installed here, so the Rust crate is not yet claimed as compiled or test-passed.
+- The project ZIP containing this step was uploaded by the user and its GitHub Actions run completed
+  successfully, confirming native Rust compilation and the macOS build. The exact run URL/id is not
+  recorded in this workspace.
+
+## Engine redevelopment — Step 2.1: Probe UI integration
+
+Status: implemented; frontend verified locally, updated native macOS build pending.
+
+- Added a per-file “בדיקת מבנה” action that invokes the existing Rust
+  `probe_book_structure` command on the selected library item.
+- The UI now displays the backend report kind, file size and `decoderAvailable` state.
+- BKC reports display `baseOffset`, `startxref`, `physicalXref`, and the XRef object number.
+- BKF reports display the page-index status and bounded-window DjVu signature result.
+- Removed the unconditional BKF warning. Unsupported-format guidance is now derived from the actual
+  probe result, so a BKC file can no longer be accompanied by a misleading BKF message.
+- No decoder or conversion support claim changed in this UI-only follow-up.
+
+### Step 2.1 verification recorded
+
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- `git diff --check`: passed.
+- Native validation required after upload: probing `688840.book` must display BKC with
+  `baseOffset=13643`, `startxref=19726749`, and `physicalXref=19740392`.

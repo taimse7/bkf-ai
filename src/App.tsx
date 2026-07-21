@@ -45,6 +45,29 @@ interface ConversionJob {
   technicalReport: string | null;
 }
 
+interface ProbeReport {
+  formatVersion: number;
+  kind: "bkc" | "bkf" | "unknown";
+  fileSize: number;
+  bkc: {
+    startxref: number;
+    physicalXref: number;
+    baseOffset: number;
+    xrefObjectNumber: number;
+    eofPhysicalOffset: number;
+  } | null;
+  bkf: {
+    standardDjvuSignatureVisible: boolean;
+    pageIndexStatus: string;
+  } | null;
+  decoderAvailable: boolean;
+}
+
+interface ProbeSelection {
+  name: string;
+  report: ProbeReport;
+}
+
 const ROW_HEIGHT = 58;
 const PAGE_SIZE = 240;
 
@@ -88,6 +111,8 @@ function App() {
   const [destination, setDestination] = useState("");
   const [collisionPolicy, setCollisionPolicy] = useState<"skip" | "rename">("skip");
   const [queue, setQueue] = useState<ConversionJob[]>([]);
+  const [probe, setProbe] = useState<ProbeSelection | null>(null);
+  const [probingPath, setProbingPath] = useState<string | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef("");
   const typeFilterRef = useRef<"" | FileType>("");
@@ -258,6 +283,23 @@ function App() {
     try { await invoke("open_local_path", { path }); } catch (reason) { showFriendlyError(reason); }
   };
 
+  const probeItem = async (item: LibraryItem) => {
+    if (!run) return;
+    setError(null);
+    setProbingPath(item.relativePath);
+    try {
+      const separator = run.rootPath.endsWith("/") ? "" : "/";
+      const report = await invoke<ProbeReport>("probe_book_structure", {
+        inputPath: `${run.rootPath}${separator}${item.relativePath}`,
+      });
+      setProbe({ name: item.name, report });
+    } catch (reason) {
+      showFriendlyError(reason);
+    } finally {
+      setProbingPath(null);
+    }
+  };
+
   const toggleSelected = async (index: number, item: LibraryItem) => {
     if (!run) return;
     const selected = !item.selected;
@@ -290,8 +332,13 @@ function App() {
             <span className={`type type-${item.fileType.toLowerCase()}`}>{item.fileType}</span>
             <time>{item.modifiedMs ? new Date(item.modifiedMs).toLocaleString("he-IL") : "—"}</time>
             <span className={`item-status status-${item.status}`}>{statusLabels[item.status] ?? item.status}</span>
-            {item.fileType === "BKC" ? <button className="row-action" onClick={() => void enqueue([item.relativePath])} disabled={!destination}>המרה</button> :
-              item.fileType === "BKF" ? <span className="bkf-note" title="הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.">אין מפענח</span> : <span>—</span>}
+            <div className="row-actions">
+              <button className="row-action" onClick={() => void probeItem(item)} disabled={probingPath !== null}>
+                {probingPath === item.relativePath ? "בודק…" : "בדיקת מבנה"}
+              </button>
+              {item.fileType === "BKC" && <button className="row-action" onClick={() => void enqueue([item.relativePath])} disabled={!destination}>המרה</button>}
+              {item.fileType === "BKF" && <span className="bkf-note" title="הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.">אין מפענח</span>}
+            </div>
           </>
         ) : <span className="row-loading">טוען רשומה…</span>}
       </div>,
@@ -350,7 +397,33 @@ function App() {
           <label><input type="radio" checked={collisionPolicy === "rename"} onChange={() => setCollisionPolicy("rename")} /> שינוי שם אוטומטי</label>
           {destination && <button className="link-button" onClick={() => void openPath(destination)}>פתיחת תיקיית היעד</button>}
         </div>
-        <p className="bkf-warning">הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. קובצי BKF אינם נשלחים למנוע ההמרה.</p>
+        {probe && <div className={`probe-panel probe-${probe.report.kind}`} aria-live="polite">
+          <div className="probe-heading">
+            <div><span className="label">תוצאת Probe מה־Rust backend</span><strong dir="auto">{probe.name}</strong></div>
+            <span className={`type type-${probe.report.kind}`}>{probe.report.kind.toUpperCase()}</span>
+          </div>
+          <dl className="probe-values">
+            <div><dt>גודל</dt><dd dir="ltr">{formatSize(probe.report.fileSize)}</dd></div>
+            <div><dt>מפענח זמין</dt><dd>{probe.report.decoderAvailable ? "כן" : "לא"}</dd></div>
+            {probe.report.bkc && <>
+              <div><dt>baseOffset</dt><dd dir="ltr">{probe.report.bkc.baseOffset.toLocaleString("en-US")}</dd></div>
+              <div><dt>startxref</dt><dd dir="ltr">{probe.report.bkc.startxref.toLocaleString("en-US")}</dd></div>
+              <div><dt>physicalXref</dt><dd dir="ltr">{probe.report.bkc.physicalXref.toLocaleString("en-US")}</dd></div>
+              <div><dt>XRef object</dt><dd dir="ltr">{probe.report.bkc.xrefObjectNumber}</dd></div>
+            </>}
+            {probe.report.bkf && <>
+              <div><dt>אינדקס עמודים</dt><dd dir="ltr">{probe.report.bkf.pageIndexStatus}</dd></div>
+              <div><dt>חתימת DjVu גלויה</dt><dd>{probe.report.bkf.standardDjvuSignatureVisible ? "כן" : "לא"}</dd></div>
+            </>}
+          </dl>
+          {!probe.report.decoderAvailable && <p className="probe-warning">
+            {probe.report.kind === "bkf"
+              ? "הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. הוא לא יישלח למנוע ההמרה."
+              : probe.report.kind === "bkc"
+                ? "מבנה BKC זוהה, אך עדיין לא קיים פרופיל פענוח מאומת עבור וריאנט זה."
+                : "מבנה הקובץ אינו מוכר ולכן הוא לא יישלח להמרה."}
+          </p>}
+        </div>}
         {queue.length > 0 && <div className="queue-summary" aria-live="polite">
           <div className="overall-progress">
             <div className="progress-copy">

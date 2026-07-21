@@ -52,5 +52,6 @@
   proven adapter.
 - BKF DjVu-signature evidence is limited to the first 64 KiB. Absence there does not prove absence
   elsewhere in the file.
-- The Rust probe crate has unit tests but could not be compiled here because the Rust toolchain is
-  unavailable. Native verification is mandatory before Step 2 is marked fully complete.
+- The new Probe result panel is frontend-verified but still requires one native macOS run after the
+  updated source is uploaded. The preceding GitHub Actions run successfully built the probe backend,
+  but it did not contain this UI connection.
