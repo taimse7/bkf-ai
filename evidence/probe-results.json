@@ -1,0 +1,68 @@
+{
+  "formatVersion": 1,
+  "results": [
+    {
+      "file": "157.book",
+      "kind": "bkf",
+      "fileSize": 2828107,
+      "decoderAvailable": false,
+      "bkf": {
+        "standardDjvuSignatureVisible": false,
+        "pageIndexStatus": "unknown"
+      }
+    },
+    {
+      "file": "221.book",
+      "kind": "bkf",
+      "fileSize": 4858066,
+      "decoderAvailable": false,
+      "bkf": {
+        "standardDjvuSignatureVisible": false,
+        "pageIndexStatus": "unknown"
+      }
+    },
+    {
+      "file": "232.book",
+      "kind": "bkf",
+      "fileSize": 2841453,
+      "decoderAvailable": false,
+      "bkf": {
+        "standardDjvuSignatureVisible": false,
+        "pageIndexStatus": "unknown"
+      }
+    },
+    {
+      "file": "241.book",
+      "kind": "bkf",
+      "fileSize": 10717137,
+      "decoderAvailable": false,
+      "bkf": {
+        "standardDjvuSignatureVisible": false,
+        "pageIndexStatus": "unknown"
+      }
+    },
+    {
+      "file": "243.book",
+      "kind": "bkf",
+      "fileSize": 20167205,
+      "decoderAvailable": false,
+      "bkf": {
+        "standardDjvuSignatureVisible": false,
+        "pageIndexStatus": "unknown"
+      }
+    },
+    {
+      "file": "688840.book",
+      "kind": "bkc",
+      "fileSize": 19740751,
+      "decoderAvailable": false,
+      "bkc": {
+        "startxref": 19726749,
+        "physicalXref": 19740392,
+        "baseOffset": 13643,
+        "xrefObjectNumber": 9225,
+        "eofPhysicalOffset": 19740744
+      }
+    }
+  ]
+}

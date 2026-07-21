@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-07-21",
+  "purpose": "External golden inputs for BKF/BKC engine research; binary samples are intentionally not committed.",
+  "samples": [
+    {
+      "fileName": "157.book",
+      "size": 2828107,
+      "sha256": "609134ce5e44b22d183e5308a85d4ea557d4308c5dd170a5920e00348c2fef6e",
+      "observedMagic": "BKF",
+      "role": "unsupported_bkf_input",
+      "evidence": "proven"
+    },
+    {
+      "fileName": "221.book",
+      "size": 4858066,
+      "sha256": "6577f49a3cb494d1c2b5ea881c30cd7b1a3a519fbb43349a97503455f962ef6e",
+      "observedMagic": "BKF",
+      "role": "unsupported_bkf_input",
+      "evidence": "proven"
+    },
+    {
+      "fileName": "232.book",
+      "size": 2841453,
+      "sha256": "ae612ea40e53bdba8b573b1c2c8ccc612ded394ec1e89e20a14272ba721e35de",
+      "observedMagic": "BKF",
+      "role": "unsupported_bkf_input",
+      "evidence": "proven"
+    },
+    {
+      "fileName": "241.book",
+      "size": 10717137,
+      "sha256": "679306bfe9bc70fb15bbe89f1909dffac1c271dfc8eec9f909bbada07f61e03a",
+      "observedMagic": "BKF",
+      "role": "unsupported_bkf_input",
+      "evidence": "proven"
+    },
+    {
+      "fileName": "243.book",
+      "size": 20167205,
+      "sha256": "7b6cf2ccc203d5e9d8d0d88551d729a791479fbae3f3e263145d01ec0b0376eb",
+      "observedMagic": "BKF",
+      "role": "unsupported_bkf_input",
+      "evidence": "proven"
+    },
+    {
+      "fileName": "688840.book",
+      "size": 19740751,
+      "sha256": "8ff5bda442f653debb40ef6fb3de7619881235051c40bfd125a2ccf69db805ba",
+      "observedMagic": "BKC",
+      "role": "unsupported_bkc_variant_input",
+      "evidence": "proven",
+      "observations": {
+        "lastStartxref": 19726749,
+        "physicalXref": 19740392,
+        "baseOffset": 13643
+      }
+    },
+    {
+      "fileName": "674817_recovered.pdf",
+      "size": 115172663,
+      "sha256": "030b0e2b93270b96ef24d63f1c5254d41ba2b54c9e0232c428f2d9e254e3b165",
+      "observedMagic": "%PDF-",
+      "role": "verified_bkc_golden_output",
+      "evidence": "proven",
+      "observations": {
+        "pdfVersion": "1.7",
+        "pageCount": 506,
+        "encrypted": false
+      }
+    }
+  ],
+  "missingEvidence": [
+    "674817.book encoded source matching the verified output",
+    "688840 decoded header or verified PDF output",
+    "Paired encoded/decoded page buffers for at least three BKF books",
+    "Original 141205 runtime capture with page offsets and paired buffers"
+  ]
+}

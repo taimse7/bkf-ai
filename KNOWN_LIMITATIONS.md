@@ -41,3 +41,16 @@
   indeterminate rather than byte-progress phases.
 - Native tests involving physical drive disconnection, a genuinely full disk, macOS folder privacy
   denial, and Finder/Preview opening remain manual tests on the generated Apple Silicon build.
+- The evidence manifest preserves hashes and proven observations, but it cannot replace the missing
+  paired runtime captures needed to implement general BKC/BKF decoders.
+- The encoded `674817.book` source is not present in the current evidence directory, although its
+  previously verified recovered PDF is preserved by hash.
+- The container probe is structural only. It does not implement `decryptHeader`, BKF page
+  boundaries, DjVu reconstruction, direct viewing, or export for unsupported variants.
+- BKC probing currently handles XRef stream objects (`/Type /XRef`) found inside the bounded 2 MiB
+  tail window. Classic textual XRef tables and unusually large trailing revisions need another
+  proven adapter.
+- BKF DjVu-signature evidence is limited to the first 64 KiB. Absence there does not prove absence
+  elsewhere in the file.
+- The Rust probe crate has unit tests but could not be compiled here because the Rust toolchain is
+  unavailable. Native verification is mandatory before Step 2 is marked fully complete.

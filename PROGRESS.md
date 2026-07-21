@@ -114,3 +114,55 @@ Status: implemented; frontend verified locally, native macOS build pending GitHu
   queue recovery after reopening; they must run in the native GitHub Actions build.
 - Physical drive removal, real disk-full behavior, macOS privacy-denied destinations, cancellation
   during a real Golden conversion, and native open actions require the macOS build and real media.
+
+## Engine redevelopment — Step 1: Evidence preservation
+
+Status: complete and locally verified.
+
+- Added a versioned evidence manifest for the six supplied BOOK samples and the verified Golden PDF.
+- The manifest records byte size, SHA-256, observed magic, evidence status and only observations that
+  were already proven. It explicitly lists missing runtime evidence.
+- Binary books and the 115 MB Golden PDF remain external to Git.
+- Added a streaming verifier that fails on missing, changed or substituted evidence files.
+- No decoder behavior or support claim changed in this step.
+
+### Step 1 verification recorded
+
+- `node evidence/verify-evidence.mjs ../upload ..`: passed, 7/7 evidence files matched by size and
+  SHA-256.
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- Rust code was not changed. `cargo test` remains unavailable on the current host because no Rust
+  toolchain is installed.
+
+## Engine redevelopment — Step 2: Container probe and structural parsers
+
+Status: implemented; real-sample structural evidence passed, Rust compilation pending.
+
+- Added a standalone `bkf-container-probe` Rust crate inside the existing Tauri project.
+- Registered it as a dependency of the existing Tauri backend and exposed the read-only
+  `probe_book_structure` command; no second application or replacement project was created.
+- Classification uses file content, never the filename or extension.
+- BKC probing reads a bounded tail window, selects the final `startxref`, finds the physical XRef
+  stream object and following `%%EOF`, and reports `baseOffset` without decoding.
+- BKF probing reports only proven bounded-window evidence. Page-index status remains `unknown` and
+  BKF is never routed through the PDF parser.
+- Reports separate proven, hypothetical and unknown evidence and expose `decoderAvailable=false`.
+- Added an independent real-sample evidence runner and its machine-readable results.
+- Added the probe crate's unit-test command to the existing Apple Silicon workflow.
+
+### Step 2 verification recorded
+
+- `node evidence/probe-evidence.mjs ../upload evidence/probe-results.json`: passed on six samples.
+- Five samples classified as BKF with `pageIndexStatus=unknown` and no visible DjVu signature in the
+  bounded head window.
+- `688840.book`: BKC, `startxref=19726749`, `physicalXref=19740392`, `baseOffset=13643`, XRef object
+  `9225`, and `decoderAvailable=false`.
+- The first evidence-runner attempt selected the wrong object-header position and rejected the BKC;
+  header selection was corrected and the complete run then passed.
+- `node --check evidence/probe-evidence.mjs`: passed.
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- `git diff --check`: passed.
+- `cargo test --manifest-path src-tauri/container-probe/Cargo.toml`: not run. Neither `cargo` nor
+  `rustc` is installed here, so the Rust crate is not yet claimed as compiled or test-passed.

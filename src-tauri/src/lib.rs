@@ -2,6 +2,7 @@ mod scanner;
 mod conversion;
 
 use bkf_converter_core::{convert_bkc, ConversionReport};
+use bkf_container_probe::{probe_path, ProbeReport};
 use bkf_scanner_core::database::{conversion_sources, init_database, last_scan, list_items, set_selected};
 use conversion::{ConversionJob, ConversionState};
 use bkf_scanner_core::models::{LibraryPage, ScanRun};
@@ -105,6 +106,11 @@ fn convert_verified_bkc(
         PathBuf::from(output_path).as_path(),
     )
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn probe_book_structure(input_path: String) -> Result<ProbeReport, String> {
+    probe_path(Path::new(&input_path)).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -223,6 +229,7 @@ pub fn run() {
             resume_last_scan,
             get_library_page,
             update_selected,
+            probe_book_structure,
             convert_verified_bkc,
             enqueue_conversions,
             get_conversion_queue,
