@@ -39,6 +39,12 @@ interface ScanProgress {
   currentPath: string | null;
 }
 
+interface ConversionJob {
+  id: string; inputPath: string; outputPath: string; name: string; fileType: FileType;
+  totalBytes: number; processedBytes: number; status: string; error: string | null;
+  technicalReport: string | null;
+}
+
 const ROW_HEIGHT = 58;
 const PAGE_SIZE = 240;
 
@@ -51,6 +57,10 @@ const statusLabels: Record<string, string> = {
   permission_denied: "אין הרשאה",
   read_error: "שגיאת קריאה",
   ready: "מוכן",
+  queued: "ממתין בתור",
+  failed: "נכשל",
+  skipped: "דולג — כבר קיים",
+  unsupported: "לא נתמך",
 };
 
 function formatSize(bytes: number) {
@@ -74,6 +84,9 @@ function App() {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nameQuery, setNameQuery] = useState("");
+  const [destination, setDestination] = useState("");
+  const [collisionPolicy, setCollisionPolicy] = useState<"skip" | "rename">("skip");
+  const [queue, setQueue] = useState<ConversionJob[]>([]);
   const viewportRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef("");
   const loadedPages = useRef(new Set<number>());
@@ -140,9 +153,12 @@ function App() {
         });
       }
     });
+    const conversionUnlisten = listen<ConversionJob[]>("conversion-progress", ({ payload }) => setQueue(payload));
+    void invoke<ConversionJob[]>("resume_conversion_queue").then((jobs) => active && setQueue(jobs)).catch((reason) => active && setError(String(reason)));
     return () => {
       active = false;
       void unlisten.then((dispose) => dispose());
+      void conversionUnlisten.then((dispose) => dispose());
     };
   }, [loadPage, resetLibrary]);
 
@@ -196,6 +212,30 @@ function App() {
     if (run) await invoke("cancel_scan", { scanId: run.id });
   };
 
+  const chooseDestination = async () => {
+    const selected = await open({ directory: true, multiple: false, title: "בחירת תיקיית יעד ל־PDF" });
+    if (selected && !Array.isArray(selected)) setDestination(selected);
+  };
+
+  const enqueue = async (relativePaths: string[], allSupported = false) => {
+    if (!run || !destination) { setError("יש לבחור תיקיית יעד לפני ההמרה"); return; }
+    setError(null);
+    try {
+      setQueue(await invoke<ConversionJob[]>("enqueue_conversions", {
+        scanId: run.id, relativePaths, allSupported, destinationPath: destination, collisionPolicy,
+      }));
+    } catch (reason) { setError(String(reason)); }
+  };
+
+  const retry = async (id: string) => {
+    try { setQueue(await invoke<ConversionJob[]>("retry_conversion", { id })); }
+    catch (reason) { setError(String(reason)); }
+  };
+
+  const openPath = async (path: string) => {
+    try { await invoke("open_local_path", { path }); } catch (reason) { setError(String(reason)); }
+  };
+
   const toggleSelected = async (index: number, item: LibraryItem) => {
     if (!run) return;
     const selected = !item.selected;
@@ -228,6 +268,8 @@ function App() {
             <span className={`type type-${item.fileType.toLowerCase()}`}>{item.fileType}</span>
             <time>{item.modifiedMs ? new Date(item.modifiedMs).toLocaleString("he-IL") : "—"}</time>
             <span className={`item-status status-${item.status}`}>{statusLabels[item.status] ?? item.status}</span>
+            {item.fileType === "BKC" ? <button className="row-action" onClick={() => void enqueue([item.relativePath])} disabled={!destination}>המרה</button> :
+              item.fileType === "BKF" ? <span className="bkf-note" title="הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.">אין מפענח</span> : <span>—</span>}
           </>
         ) : <span className="row-loading">טוען רשומה…</span>}
       </div>,
@@ -265,6 +307,43 @@ function App() {
 
       {error && <div className="error-banner" role="alert">{error}</div>}
 
+      <section className="conversion-card" aria-label="המרת BKC ל-PDF">
+        <div className="conversion-heading">
+          <div><span className="label">Conversion UI</span><h2>המרת BKC ל־PDF</h2></div>
+          <div className="actions">
+            <button className="secondary" onClick={() => void chooseDestination()}>בחירת תיקיית יעד</button>
+            <button className="primary" disabled={!run || !destination} onClick={() => void enqueue([], true)}>המרת כל הספרים הנתמכים</button>
+            {queue.some((job) => job.status === "running" || job.status === "queued") &&
+              <button className="secondary danger" onClick={() => void invoke("cancel_conversions")}>ביטול בטוח</button>}
+          </div>
+        </div>
+        <div className="destination-row">
+          <strong dir="auto">{destination || "טרם נבחרה תיקיית יעד"}</strong>
+          <label><input type="radio" checked={collisionPolicy === "skip"} onChange={() => setCollisionPolicy("skip")} /> דילוג על קובץ קיים</label>
+          <label><input type="radio" checked={collisionPolicy === "rename"} onChange={() => setCollisionPolicy("rename")} /> שינוי שם אוטומטי</label>
+          {destination && <button className="link-button" onClick={() => void openPath(destination)}>פתיחת תיקיית היעד</button>}
+        </div>
+        <p className="bkf-warning">הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. קובצי BKF אינם נשלחים למנוע ההמרה.</p>
+        {queue.length > 0 && <>
+          <div className="overall-progress">
+            <span>התקדמות כוללת</span>
+            <progress value={queue.reduce((sum, job) => sum + job.processedBytes, 0)} max={Math.max(1, queue.reduce((sum, job) => sum + job.totalBytes, 0))} />
+            <strong>{queue.filter((job) => ["completed", "skipped", "unsupported"].includes(job.status)).length}/{queue.length}</strong>
+          </div>
+          <div className="queue-list">{queue.map((job) => <article className="queue-job" key={job.id}>
+            <div><strong dir="auto">{job.name}</strong><span>{job.status === "running" ? "ממיר" : (statusLabels[job.status] ?? job.status)}</span></div>
+            <progress value={job.processedBytes} max={Math.max(1, job.totalBytes)} />
+            <span>{formatSize(job.processedBytes)} / {formatSize(job.totalBytes)}</span>
+            <div className="job-actions">
+              {job.status === "completed" && <button onClick={() => void openPath(job.outputPath)}>פתיחת ה־PDF</button>}
+              {(["failed", "cancelled", "disconnected"].includes(job.status)) && <button onClick={() => void retry(job.id)}>ניסיון חוזר</button>}
+              {job.technicalReport && <details><summary>דוח שגיאה טכני</summary><pre dir="ltr">{job.technicalReport}</pre></details>}
+            </div>
+            {job.error && <p className="job-error">{job.error}</p>}
+          </article>)}</div>
+        </>}
+      </section>
+
       <section className="library-card" aria-label="רשימת קבצים">
         <div className="library-tools">
           <label htmlFor="library-search">חיפוש לפי שם</label>
@@ -275,7 +354,7 @@ function App() {
         </div>
         <div className="library-header">
           <span>סימון</span><span>שם</span><span>נתיב יחסי</span><span>גודל</span>
-          <span>סוג</span><span>תאריך שינוי</span><span>סטטוס</span>
+          <span>סוג</span><span>תאריך שינוי</span><span>סטטוס</span><span>פעולה</span>
         </div>
         <div
           className="virtual-viewport"

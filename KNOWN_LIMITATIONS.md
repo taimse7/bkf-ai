@@ -29,3 +29,11 @@
   are about 230 MB. The ignored integration test must be invoked explicitly with `BKF_GOLDEN_DIR`.
 - The first native macOS workflow exposed a missing Tauri icon and therefore did not reach app/DMG
   bundling. Icons are now included, but the corrected native workflow has not yet run.
+- Stage 4 persists and resumes the conversion queue, but recovery restarts the interrupted file from
+  byte zero; it does not append to a partial temporary PDF.
+- Free-space failure is reported from the operating-system write error. The app does not reserve the
+  full output size in advance because another process can consume disk space during conversion.
+- Progress covers streaming output bytes. Final PDF validation and SHA-256 verification are
+  indeterminate rather than byte-progress phases.
+- Native tests involving physical drive disconnection, a genuinely full disk, macOS folder privacy
+  denial, and Finder/Preview opening remain manual tests on the generated Apple Silicon build.

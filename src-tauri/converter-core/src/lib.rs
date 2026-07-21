@@ -27,6 +27,7 @@ pub enum ConversionError {
     UnknownDecoderProfile,
     UnsafeOutput(String),
     InvalidPdf(String),
+    Cancelled,
 }
 
 impl std::fmt::Display for ConversionError {
@@ -37,6 +38,7 @@ impl std::fmt::Display for ConversionError {
             Self::UnknownDecoderProfile => f.write_str("וריאנט BKC לא מוכר; ההמרה נעצרה"),
             Self::UnsafeOutput(reason) => write!(f, "יעד פלט לא בטוח: {reason}"),
             Self::InvalidPdf(reason) => write!(f, "אימות PDF נכשל: {reason}"),
+            Self::Cancelled => f.write_str("ההמרה בוטלה בבטחה"),
         }
     }
 }
@@ -63,6 +65,19 @@ struct DecoderProfile {
 }
 
 pub fn convert_bkc(input: &Path, output: &Path) -> Result<ConversionReport, ConversionError> {
+    convert_bkc_with_control(input, output, |_| {}, || false)
+}
+
+pub fn convert_bkc_with_control<P, C>(
+    input: &Path,
+    output: &Path,
+    mut progress: P,
+    cancelled: C,
+) -> Result<ConversionReport, ConversionError>
+where
+    P: FnMut(u64),
+    C: Fn() -> bool,
+{
     let canonical_input = input.canonicalize()?;
     let source_directory = canonical_input.parent()
         .ok_or_else(|| ConversionError::UnsafeOutput("תיקיית המקור אינה תקינה".into()))?;
@@ -120,15 +135,19 @@ pub fn convert_bkc(input: &Path, output: &Path) -> Result<ConversionReport, Conv
 
     let temporary = temporary_path(output);
     let conversion = (|| -> Result<ConversionReport, ConversionError> {
+        if cancelled() { return Err(ConversionError::Cancelled); }
         let destination = OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         let mut writer = BufWriter::with_capacity(COPY_BUFFER, destination);
         writer.write_all(&decoded)?;
+        progress(PREFIX_LEN as u64);
         source.seek(SeekFrom::Start(base_offset + PREFIX_LEN as u64))?;
         let mut buffer = vec![0_u8; COPY_BUFFER];
         loop {
+            if cancelled() { return Err(ConversionError::Cancelled); }
             let read = source.read(&mut buffer)?;
             if read == 0 { break; }
             writer.write_all(&buffer[..read])?;
+            progress(source.stream_position()?.saturating_sub(base_offset));
         }
         writer.flush()?;
         writer.get_ref().sync_all()?;

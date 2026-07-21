@@ -2,6 +2,14 @@ use crate::models::{LibraryItem, LibraryPage, PendingItem, ScanRun};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
+#[derive(Debug)]
+pub struct ConversionSource {
+    pub relative_path: String,
+    pub name: String,
+    pub size: u64,
+    pub file_type: String,
+}
+
 pub fn init_database(path: &Path) -> rusqlite::Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -239,6 +247,27 @@ pub fn set_selected(
         params![scan_id, relative_path, selected as i64],
     )?;
     Ok(())
+}
+
+pub fn conversion_sources(
+    connection: &Connection,
+    scan_id: &str,
+    relative_paths: &[String],
+    all_supported: bool,
+) -> rusqlite::Result<Vec<ConversionSource>> {
+    let mut statement = connection.prepare(
+        "SELECT relative_path, name, size, file_type FROM library_items
+         WHERE scan_id=?1 AND file_type IN ('BKC','BKF') ORDER BY relative_path COLLATE NOCASE",
+    )?;
+    let rows = statement.query_map([scan_id], |row| Ok(ConversionSource {
+        relative_path: row.get(0)?, name: row.get(1)?,
+        size: row.get::<_, i64>(2)? as u64, file_type: row.get(3)?,
+    }))?;
+    let requested: std::collections::HashSet<&str> = relative_paths.iter().map(String::as_str).collect();
+    rows.filter(|row| match row {
+        Ok(item) => all_supported || requested.contains(item.relative_path.as_str()),
+        Err(_) => true,
+    }).collect()
 }
 
 #[cfg(test)]

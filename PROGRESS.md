@@ -75,3 +75,31 @@ Status: implemented and verified against the supplied golden files.
   `030B0E2B93270B96EF24D63F1C5254D41BA2B54C9E0232C428F2D9E254E3B165`.
 - Streaming binary comparison against `674817_recovered.pdf`: identical.
 - No BKF conversion was added.
+
+## Stage 4 — Conversion UI Integration
+
+Status: implemented; frontend verified locally, native macOS build pending GitHub Actions.
+
+- The verified Rust BKC engine is connected to a Hebrew RTL conversion interface.
+- A writable destination directory is selected through the native directory dialog.
+- A single BKC row or all supported BKC books can be enqueued.
+- The Rust worker processes jobs sequentially and emits per-file byte progress and aggregate progress.
+- Queue state is persisted in Application Support; a job interrupted by app closure returns to
+  `queued` and resumes when the app is reopened.
+- Cancellation is cooperative between streaming chunks. Temporary output is removed and no final
+  PDF is renamed into place after cancellation.
+- Existing PDFs can be skipped or assigned an automatic numbered filename.
+- Completed PDFs and the destination directory can be opened through macOS.
+- Failed/cancelled/disconnected jobs can be retried and retain a technical report.
+- BKF rows display: “הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.” They never enter the converter.
+- Paths, sizes and progress use `u64`, and the engine remains streaming for files above 4 GB.
+
+### Stage 4 verification recorded
+
+- `pnpm test`: passed, 2 tests.
+- `pnpm build`: passed, TypeScript compiled and Vite transformed 21 modules.
+- Rust tests could not be executed on this restored Linux workspace because no Rust toolchain is
+  installed. New Rust tests cover existing-file skip/rename, Hebrew filenames, BKF rejection, and
+  queue recovery after reopening; they must run in the native GitHub Actions build.
+- Physical drive removal, real disk-full behavior, macOS privacy-denied destinations, cancellation
+  during a real Golden conversion, and native open actions require the macOS build and real media.
