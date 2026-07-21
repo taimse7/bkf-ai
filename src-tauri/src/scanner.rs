@@ -6,6 +6,7 @@ use bkf_scanner_core::database::{
 use bkf_scanner_core::models::{PendingItem, ScanProgress, ScanRun};
 use std::collections::HashMap;
 use std::io::{self};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -166,6 +167,7 @@ fn scan_directory(
             Err(error) => {
                 errors += 1;
                 let path = error.path().unwrap_or(source);
+                append_diagnostic(app, &format!("scan path={} error={error}", path.display()));
                 let relative = relative_string(source, path);
                 let status = if error
                     .io_error()
@@ -202,6 +204,7 @@ fn scan_directory(
             Ok(metadata) => metadata,
             Err(error) => {
                 errors += 1;
+                append_diagnostic(app, &format!("metadata path={} error={error}", path.display()));
                 pending.push(PendingItem {
                     name,
                     relative_path,
@@ -224,6 +227,7 @@ fn scan_directory(
                     Ok(file_type) => (file_type.into(), "ready".into()),
                     Err(error) => {
                         errors += 1;
+                        append_diagnostic(app, &format!("classify path={} error={error}", path.display()));
                         ("Unknown".into(), io_status(error.kind()).into())
                     }
                 },
@@ -260,6 +264,15 @@ fn scan_directory(
     update_scan(&connection, &run.id, status, scanned, errors, now_ms())?;
     emit_progress(app, run, status, scanned, errors, None);
     Ok(())
+}
+
+fn append_diagnostic(app: &AppHandle, message: &str) {
+    let Ok(directory) = app.path().app_data_dir() else { return; };
+    let _ = std::fs::create_dir_all(&directory);
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(directory.join("bkf-ai.log")) {
+        let timestamp = now_ms();
+        let _ = writeln!(file, "[{timestamp}] {message}");
+    }
 }
 
 fn flush(

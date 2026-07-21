@@ -9,6 +9,7 @@ use scanner::{spawn_scan, ScanState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
+use std::fs;
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, tauri::Error> {
     Ok(app.path().app_data_dir()?.join("library.sqlite3"))
@@ -85,11 +86,12 @@ fn get_library_page(
     offset: u64,
     limit: u64,
     name_query: String,
+    file_type: String,
     app: AppHandle,
 ) -> Result<LibraryPage, String> {
     let path = database_path(&app).map_err(|error| error.to_string())?;
     let connection = init_database(&path).map_err(|error| error.to_string())?;
-    list_items(&connection, &scan_id, offset, limit.min(500), &name_query)
+    list_items(&connection, &scan_id, offset, limit.min(500), &name_query, &file_type)
         .map_err(|error| error.to_string())
 }
 
@@ -168,6 +170,28 @@ fn open_local_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn export_diagnostics(
+    output_path: String,
+    app: AppHandle,
+    state: State<'_, Arc<ConversionState>>,
+) -> Result<(), String> {
+    let db_path = database_path(&app).map_err(|error| error.to_string())?;
+    let scan = init_database(&db_path).ok().and_then(|connection| last_scan(&connection).ok().flatten());
+    let application_log = app.path().app_data_dir().ok()
+        .and_then(|directory| fs::read_to_string(directory.join("bkf-ai.log")).ok())
+        .unwrap_or_default();
+    let report = serde_json::json!({
+        "application": "BKF AI",
+        "generatedAtUnixMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis()),
+        "scan": scan,
+        "conversionQueue": state.snapshot(),
+        "applicationLog": application_log,
+    });
+    fs::write(&output_path, serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("לא ניתן לשמור את קובץ האבחון: {error}"))
+}
+
+#[tauri::command]
 fn update_selected(
     scan_id: String,
     relative_path: String,
@@ -205,7 +229,8 @@ pub fn run() {
             resume_conversion_queue,
             cancel_conversions,
             retry_conversion,
-            open_local_path
+            open_local_path,
+            export_diagnostics
         ])
         .run(tauri::generate_context!())
         .expect("error while running BKF AI");

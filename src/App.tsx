@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { visibleRange } from "./virtualization";
 
 type FileType = "BKC" | "BKF" | "Unknown";
@@ -84,11 +84,13 @@ function App() {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nameQuery, setNameQuery] = useState("");
+  const [fileTypeFilter, setFileTypeFilter] = useState<"" | FileType>("");
   const [destination, setDestination] = useState("");
   const [collisionPolicy, setCollisionPolicy] = useState<"skip" | "rename">("skip");
   const [queue, setQueue] = useState<ConversionJob[]>([]);
   const viewportRef = useRef<HTMLDivElement>(null);
   const queryRef = useRef("");
+  const typeFilterRef = useRef<"" | FileType>("");
   const loadedPages = useRef(new Set<number>());
 
   const loadPage = useCallback(async (scanId: string, offset: number, query: string, force = false) => {
@@ -101,6 +103,7 @@ function App() {
         offset: pageOffset,
         limit: PAGE_SIZE,
         nameQuery: query,
+        fileType: typeFilterRef.current,
       });
       if (query !== queryRef.current) return;
       setTotal(page.total);
@@ -111,7 +114,7 @@ function App() {
       });
     } catch (reason) {
       loadedPages.current.delete(pageOffset);
-      setError(String(reason));
+      showFriendlyError(reason);
     }
   }, []);
 
@@ -132,7 +135,7 @@ function App() {
         const scan = await invoke<ScanRun | null>("resume_last_scan");
         if (active && scan) resetLibrary(scan);
       } catch (reason) {
-        if (active) setError(String(reason));
+        if (active) showFriendlyError(reason);
       } finally {
         if (active) setBusy(false);
       }
@@ -154,7 +157,7 @@ function App() {
       }
     });
     const conversionUnlisten = listen<ConversionJob[]>("conversion-progress", ({ payload }) => setQueue(payload));
-    void invoke<ConversionJob[]>("resume_conversion_queue").then((jobs) => active && setQueue(jobs)).catch((reason) => active && setError(String(reason)));
+    void invoke<ConversionJob[]>("resume_conversion_queue").then((jobs) => active && setQueue(jobs)).catch((reason) => active && showFriendlyError(reason));
     return () => {
       active = false;
       void unlisten.then((dispose) => dispose());
@@ -181,6 +184,7 @@ function App() {
 
   useEffect(() => {
     queryRef.current = nameQuery;
+    typeFilterRef.current = fileTypeFilter;
     if (!run) return;
     const timer = window.setTimeout(() => {
       loadedPages.current.clear();
@@ -191,7 +195,21 @@ function App() {
       void loadPage(run.id, 0, nameQuery, true);
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [loadPage, nameQuery, run?.id]);
+  }, [fileTypeFilter, loadPage, nameQuery, run?.id]);
+
+  const showFriendlyError = (reason: unknown) => {
+    console.error(reason);
+    setError("הפעולה לא הושלמה. אפשר להוריד את קובץ האבחון ולצרף אותו לבדיקה.");
+  };
+
+  const downloadLog = async () => {
+    const target = await save({ title: "שמירת קובץ אבחון", defaultPath: "bkf-ai-diagnostics.log" });
+    if (!target) return;
+    try {
+      await invoke("export_diagnostics", { outputPath: target });
+      setError(null);
+    } catch (reason) { showFriendlyError(reason); }
+  };
 
   const chooseSource = async () => {
     setError(null);
@@ -202,7 +220,7 @@ function App() {
       const scan = await invoke<ScanRun>("start_scan", { sourcePath: selected });
       resetLibrary(scan);
     } catch (reason) {
-      setError(String(reason));
+      showFriendlyError(reason);
     } finally {
       setBusy(false);
     }
@@ -224,16 +242,16 @@ function App() {
       setQueue(await invoke<ConversionJob[]>("enqueue_conversions", {
         scanId: run.id, relativePaths, allSupported, destinationPath: destination, collisionPolicy,
       }));
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) { showFriendlyError(reason); }
   };
 
   const retry = async (id: string) => {
     try { setQueue(await invoke<ConversionJob[]>("retry_conversion", { id })); }
-    catch (reason) { setError(String(reason)); }
+    catch (reason) { showFriendlyError(reason); }
   };
 
   const openPath = async (path: string) => {
-    try { await invoke("open_local_path", { path }); } catch (reason) { setError(String(reason)); }
+    try { await invoke("open_local_path", { path }); } catch (reason) { showFriendlyError(reason); }
   };
 
   const toggleSelected = async (index: number, item: LibraryItem) => {
@@ -248,7 +266,7 @@ function App() {
       });
     } catch (reason) {
       setItems((current) => new Map(current).set(index, item));
-      setError(String(reason));
+      showFriendlyError(reason);
     }
   };
 
@@ -301,11 +319,11 @@ function App() {
         <div className="scan-metrics">
           <span>{statusLabels[run?.status ?? ""] ?? (busy ? "טוען" : "ממתין")}</span>
           <strong>{(run?.scanned ?? 0).toLocaleString("he-IL")} קבצים</strong>
-          {(run?.errors ?? 0) > 0 && <span className="error-count">{run?.errors} שגיאות</span>}
+          {(run?.errors ?? 0) > 0 && <span className="error-count">חלק מהקבצים לא נקראו</span>}
         </div>
       </section>
 
-      {error && <div className="error-banner" role="alert">{error}</div>}
+      {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button></div>}
 
       <section className="conversion-card" aria-label="המרת BKC ל-PDF">
         <div className="conversion-heading">
@@ -337,9 +355,9 @@ function App() {
             <div className="job-actions">
               {job.status === "completed" && <button onClick={() => void openPath(job.outputPath)}>פתיחת ה־PDF</button>}
               {(["failed", "cancelled", "disconnected"].includes(job.status)) && <button onClick={() => void retry(job.id)}>ניסיון חוזר</button>}
-              {job.technicalReport && <details><summary>דוח שגיאה טכני</summary><pre dir="ltr">{job.technicalReport}</pre></details>}
+              {job.technicalReport && job.status !== "completed" && <button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button>}
             </div>
-            {job.error && <p className="job-error">{job.error}</p>}
+            {job.error && <p className="job-error">ההמרה לא הושלמה. ניתן לנסות שוב או להוריד קובץ אבחון.</p>}
           </article>)}</div>
         </>}
       </section>
@@ -350,6 +368,14 @@ function App() {
           <input id="library-search" type="search" value={nameQuery}
             onChange={(event) => setNameQuery(event.target.value)}
             placeholder="הקלד שם קובץ…" disabled={!run} dir="auto" />
+          <label htmlFor="file-type-filter">סוג קובץ</label>
+          <select id="file-type-filter" value={fileTypeFilter} disabled={!run}
+            onChange={(event) => setFileTypeFilter(event.target.value as "" | FileType)}>
+            <option value="">כל הסוגים</option>
+            <option value="BKC">BKC — נתמך להמרה</option>
+            <option value="BKF">BKF — ללא מפענח</option>
+            <option value="Unknown">לא מזוהה</option>
+          </select>
           {nameQuery && <span>{total.toLocaleString("he-IL")} תוצאות</span>}
         </div>
         <div className="library-header">

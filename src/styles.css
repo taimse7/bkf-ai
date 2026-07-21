@@ -30,7 +30,8 @@ h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
 .scan-metrics { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
 .scan-metrics > span:first-child { color: #176e83; font-weight: 800; }
 .error-count { color: #a13137; }
-.error-banner { max-width: 1500px; margin: 0 auto 14px; padding: 12px 16px; color: #8b252b; background: #fff0f0; border: 1px solid #efc5c7; border-radius: 11px; }
+.error-banner { display:flex; align-items:center; justify-content:space-between; gap:14px; max-width:1500px; margin:0 auto 14px; padding:12px 16px; color:#774c11; background:#fff8e8; border:1px solid #ead7aa; border-radius:11px; }
+.error-banner button { padding:7px 11px; color:#176e83; background:white; border:1px solid #b9ced5; border-radius:8px; white-space:nowrap; }
 
 .conversion-card { padding: 18px; margin-bottom: 14px; }
 .conversion-heading, .destination-row, .overall-progress { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -54,8 +55,9 @@ h1 { margin: 0; font-size: clamp(28px, 4vw, 42px); }
 .library-card { overflow: hidden; }
 .library-tools { display: flex; align-items: center; gap: 12px; padding: 12px 15px; border-bottom: 1px solid #dce5e8; background: white; }
 .library-tools label { color: #526673; font-size: 12px; font-weight: 800; white-space: nowrap; }
-.library-tools input { width: min(420px, 55vw); height: 38px; padding: 0 12px; color: #172b3a; background: #f8fafb; border: 1px solid #cbd7dc; border-radius: 10px; outline: none; }
-.library-tools input:focus { border-color: #176e83; box-shadow: 0 0 0 3px rgba(23,110,131,.12); }
+.library-tools input { width: min(420px, 55vw); }
+.library-tools input, .library-tools select { height:38px; padding:0 12px; color:#172b3a; background:#f8fafb; border:1px solid #cbd7dc; border-radius:10px; outline:none; }
+.library-tools input:focus, .library-tools select:focus { border-color: #176e83; box-shadow: 0 0 0 3px rgba(23,110,131,.12); }
 .library-tools span { color: #667985; font-size: 12px; }
 .library-header, .library-row { display: grid; grid-template-columns: 64px minmax(150px,1.2fr) minmax(200px,2fr) 85px 75px 145px 115px 90px; align-items: center; gap: 10px; padding-inline: 15px; }
 .library-header { height: 46px; color: #526673; background: #f6f8f9; border-bottom: 1px solid #dce5e8; font-size: 12px; font-weight: 800; }

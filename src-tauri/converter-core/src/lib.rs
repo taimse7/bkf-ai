@@ -106,16 +106,14 @@ where
     source.seek(SeekFrom::Start(tail_start))?;
     let mut tail = Vec::with_capacity((input_size - tail_start) as usize);
     source.read_to_end(&mut tail)?;
-    let startxref_marker = rfind(&tail, b"startxref\n")
+    let startxref_marker = rfind(&tail, b"startxref")
         .ok_or(ConversionError::InvalidBkc("startxref לא נמצא"))?;
-    let startxref = parse_decimal_line(&tail[startxref_marker + 10..])
+    let startxref = parse_decimal_line(&tail[startxref_marker + b"startxref".len()..])
         .ok_or(ConversionError::InvalidBkc("ערך startxref אינו תקין"))?;
-    let xref_type = rfind(&tail[..startxref_marker], b"/Type /XRef")
+    let xref_type = rfind_xref_type(&tail[..startxref_marker])
         .ok_or(ConversionError::InvalidBkc("XRef פיזי לא נמצא"))?;
-    let object_line_end = rfind(&tail[..xref_type], b" obj\n")
-        .ok_or(ConversionError::InvalidBkc("תחילת אובייקט XRef לא נמצאה"))? + 5;
-    let object_line_start = tail[..object_line_end - 1].iter()
-        .rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
+    let object_line_start = find_object_start(&tail[..xref_type])
+        .ok_or(ConversionError::InvalidBkc("תחילת אובייקט XRef לא נמצאה"))?;
     let physical_xref = tail_start + object_line_start as u64;
     let base_offset = physical_xref.checked_sub(startxref)
         .ok_or(ConversionError::InvalidBkc("היסט XRef שלילי"))?;
@@ -201,7 +199,7 @@ fn validate_pdf(path: &Path, expected_startxref: u64) -> Result<(u64, u64, Strin
     check.seek(SeekFrom::Start(expected_startxref))?;
     let mut xref = [0_u8; 4096];
     let read = check.read(&mut xref)?;
-    if !contains(&xref[..read], b"/Type /XRef") {
+    if rfind_xref_type(&xref[..read]).is_none() {
         return Err(ConversionError::InvalidPdf("startxref אינו מצביע ל־XRef".into()));
     }
     let tail_len = size.min(1024);
@@ -229,8 +227,26 @@ fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 fn contains(haystack: &[u8], needle: &[u8]) -> bool { rfind(haystack, needle).is_some() }
 fn parse_decimal_line(bytes: &[u8]) -> Option<u64> {
-    let end = bytes.iter().position(|byte| !byte.is_ascii_digit()).unwrap_or(bytes.len());
-    std::str::from_utf8(&bytes[..end]).ok()?.parse().ok()
+    let start = bytes.iter().position(|byte| !byte.is_ascii_whitespace())?;
+    let digits = &bytes[start..];
+    let end = digits.iter().position(|byte| !byte.is_ascii_digit()).unwrap_or(digits.len());
+    if end == 0 { return None; }
+    std::str::from_utf8(&digits[..end]).ok()?.parse().ok()
+}
+
+fn rfind_xref_type(bytes: &[u8]) -> Option<usize> {
+    bytes.windows(b"/Type".len()).enumerate().filter_map(|(index, window)| {
+        if window != b"/Type" { return None; }
+        let rest = &bytes[index + b"/Type".len()..];
+        let start = rest.iter().position(|byte| !byte.is_ascii_whitespace())?;
+        rest[start..].starts_with(b"/XRef").then_some(index)
+    }).last()
+}
+
+fn find_object_start(bytes: &[u8]) -> Option<usize> {
+    let obj = rfind(bytes, b" obj")?;
+    let line_start = bytes[..obj].iter().rposition(|byte| matches!(byte, b'\n' | b'\r')).map_or(0, |i| i + 1);
+    bytes[line_start..obj].iter().all(|byte| byte.is_ascii_digit() || byte.is_ascii_whitespace()).then_some(line_start)
 }
 fn decode_hex(value: &str) -> Option<Vec<u8>> {
     if value.len() % 2 != 0 { return None; }
@@ -255,6 +271,12 @@ mod tests {
     #[test]
     fn rejects_unknown_decoder_profile() {
         assert!(matches!(select_profile(&[0_u8; PREFIX_LEN]), Err(ConversionError::UnknownDecoderProfile)));
+    }
+    #[test]
+    fn accepts_crlf_and_compact_xref_syntax() {
+        assert_eq!(parse_decimal_line(b"\r\n19726749\r\n"), Some(19_726_749));
+        assert_eq!(rfind_xref_type(b"<</Type/XRef/Length 4>>"), Some(2));
+        assert_eq!(find_object_start(b"data\r9225 0 obj\r<</Type/XRef>>"), Some(5));
     }
     #[test]
     fn never_converts_bkf() {

@@ -1,5 +1,12 @@
 # Progress
 
+## Current update — file variants, filters and diagnostics
+
+- The PDF structure parser accepts LF/CRLF, optional whitespace and compact `/Type/XRef` syntax.
+- Library results can be filtered in SQLite by BKC, BKF or unknown type.
+- Technical conversion failures are no longer expanded in the main UI; a combined diagnostics file can be saved instead.
+- Scanner I/O failures are appended to the persistent application log and included in the exported diagnostics.
+
 ## Stage 1 — Mac Build Proof
 
 Status: source implementation complete; native macOS verification pending.

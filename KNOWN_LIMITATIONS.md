@@ -1,5 +1,7 @@
 # Known Limitations
 
+- `688840.book` is now parsed correctly through its `startxref`/XRef structure, but its encoded 200-byte PDF header uses a decoder profile that has not yet been safely reconstructed. It is recognized as BKC and rejected without producing a partial PDF rather than being reported as missing `startxref`.
+
 - BKC conversion currently supports only the decoder profile verified by `674817.book`.
   Other BKC variants are rejected rather than guessed.
 - Full BKF decoding is not implemented or claimed.
