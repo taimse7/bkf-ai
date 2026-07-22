@@ -1,5 +1,9 @@
 # Known Limitations
 
+- `688840.book` is now parsed correctly through its `startxref`/XRef structure, but its encoded 200-byte PDF header uses a decoder profile that has not yet been safely reconstructed. It is recognized as BKC and rejected without producing a partial PDF rather than being reported as missing `startxref`.
+- The compact conversion summary intentionally does not show every historical job on the main
+  screen. Technical details remain available through the downloadable diagnostics log.
+
 - BKC conversion currently supports only the decoder profile verified by `674817.book`.
   Other BKC variants are rejected rather than guessed.
 - Full BKF decoding is not implemented or claimed.
@@ -37,13 +41,28 @@
   indeterminate rather than byte-progress phases.
 - Native tests involving physical drive disconnection, a genuinely full disk, macOS folder privacy
   denial, and Finder/Preview opening remain manual tests on the generated Apple Silicon build.
-# Current repair-engine limitation (2026-07-21)
-
-- Unknown BKC prefixes now have an implemented Ghostscript repair path, but the
-  DMG does not yet bundle Ghostscript. The command is resolved from
-  `BKF_AI_GS_PATH` or `PATH`; without it, conversion returns an explicit
-  `RepairUnavailable` error and does not publish a partial PDF.
-- The `688840.pdf` sample is a Ghostscript rewrite, not an exact-prefix recovery.
-  It cannot safely be used as a 200-byte XOR profile for the original container.
-- The new Rust path has not yet compiled in this workspace because `cargo` and
-  `rustc` are unavailable here. GitHub Actions verification is still required.
+- The evidence manifest preserves hashes and proven observations, but it cannot replace the missing
+  paired runtime captures needed to implement general BKC/BKF decoders.
+- The encoded `674817.book` source is not present in the current evidence directory, although its
+  previously verified recovered PDF is preserved by hash.
+- The container probe is structural only. It does not implement `decryptHeader`, BKF page
+  boundaries, DjVu reconstruction, direct viewing, or export for unsupported variants.
+- BKC probing currently handles XRef stream objects (`/Type /XRef`) found inside the bounded 2 MiB
+  tail window. Classic textual XRef tables and unusually large trailing revisions need another
+  proven adapter.
+- BKF DjVu-signature evidence is limited to the first 64 KiB. Absence there does not prove absence
+  elsewhere in the file.
+- The new Probe result panel is frontend-verified but still requires one native macOS run after the
+  updated source is uploaded. The preceding GitHub Actions run successfully built the probe backend,
+  but it did not contain this UI connection.
+- Structural JSON reports intentionally contain no decoded content, keys, device identifiers or
+  runtime data. They cannot add support for an unknown BKC/BKF decoder profile.
+- A successful frontend build or source ZIP does not prove the current GitHub `main` commit builds
+  natively. Only a successful `Mac Build Proof` run for the uploaded commit establishes that the
+  Rust backend compiled and the `.app`/`.dmg` artifacts were produced.
+- Numerical golden-file claims require the external matching source/output fixtures. They cannot be
+  independently reproduced from the repository alone because the large book/PDF fixtures are not
+  committed.
+- The Ghostscript fallback resolves `BKF_AI_GS_PATH` or `gs` from `PATH`; Ghostscript is not bundled.
+  The fallback has not yet passed a successful native CI run or an acceptance conversion in this
+  reconciled source package, so it must not be described as a released general BKC converter.

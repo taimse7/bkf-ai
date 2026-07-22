@@ -2,6 +2,7 @@ mod scanner;
 mod conversion;
 
 use bkf_converter_core::{convert_bkc, ConversionReport};
+use bkf_container_probe::{probe_path, ProbeReport};
 use bkf_scanner_core::database::{conversion_sources, init_database, last_scan, list_items, set_selected};
 use conversion::{ConversionJob, ConversionState};
 use bkf_scanner_core::models::{LibraryPage, ScanRun};
@@ -9,6 +10,7 @@ use scanner::{spawn_scan, ScanState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
+use std::fs;
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, tauri::Error> {
     Ok(app.path().app_data_dir()?.join("library.sqlite3"))
@@ -85,11 +87,12 @@ fn get_library_page(
     offset: u64,
     limit: u64,
     name_query: String,
+    file_type: String,
     app: AppHandle,
 ) -> Result<LibraryPage, String> {
     let path = database_path(&app).map_err(|error| error.to_string())?;
     let connection = init_database(&path).map_err(|error| error.to_string())?;
-    list_items(&connection, &scan_id, offset, limit.min(500), &name_query)
+    list_items(&connection, &scan_id, offset, limit.min(500), &name_query, &file_type)
         .map_err(|error| error.to_string())
 }
 
@@ -103,6 +106,40 @@ fn convert_verified_bkc(
         PathBuf::from(output_path).as_path(),
     )
     .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn probe_book_structure(input_path: String) -> Result<ProbeReport, String> {
+    probe_path(Path::new(&input_path)).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_probe_report(input_path: String, output_path: String) -> Result<(), String> {
+    let input = PathBuf::from(&input_path)
+        .canonicalize()
+        .map_err(|error| format!("קובץ המקור אינו זמין: {error}"))?;
+    if !input.is_file() {
+        return Err("המקור שנבחר אינו קובץ".into());
+    }
+    let report = probe_path(&input).map_err(|error| error.to_string())?;
+    let document = serde_json::json!({
+        "schemaVersion": 1,
+        "application": "BKF AI",
+        "generatedAtUnixMs": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis()),
+        "source": {
+            "name": input.file_name().and_then(|name| name.to_str()).unwrap_or(""),
+            "size": report.file_size,
+        },
+        "probe": report,
+        "scope": "structural-analysis-only",
+    });
+    fs::write(
+        &output_path,
+        serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| format!("לא ניתן לשמור את דוח המבנה: {error}"))
 }
 
 #[tauri::command]
@@ -168,6 +205,28 @@ fn open_local_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn export_diagnostics(
+    output_path: String,
+    app: AppHandle,
+    state: State<'_, Arc<ConversionState>>,
+) -> Result<(), String> {
+    let db_path = database_path(&app).map_err(|error| error.to_string())?;
+    let scan = init_database(&db_path).ok().and_then(|connection| last_scan(&connection).ok().flatten());
+    let application_log = app.path().app_data_dir().ok()
+        .and_then(|directory| fs::read_to_string(directory.join("bkf-ai.log")).ok())
+        .unwrap_or_default();
+    let report = serde_json::json!({
+        "application": "BKF AI",
+        "generatedAtUnixMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis()),
+        "scan": scan,
+        "conversionQueue": state.snapshot(),
+        "applicationLog": application_log,
+    });
+    fs::write(&output_path, serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?)
+        .map_err(|error| format!("לא ניתן לשמור את קובץ האבחון: {error}"))
+}
+
+#[tauri::command]
 fn update_selected(
     scan_id: String,
     relative_path: String,
@@ -199,13 +258,16 @@ pub fn run() {
             resume_last_scan,
             get_library_page,
             update_selected,
+            probe_book_structure,
+            export_probe_report,
             convert_verified_bkc,
             enqueue_conversions,
             get_conversion_queue,
             resume_conversion_queue,
             cancel_conversions,
             retry_conversion,
-            open_local_path
+            open_local_path,
+            export_diagnostics
         ])
         .run(tauri::generate_context!())
         .expect("error while running BKF AI");

@@ -1,5 +1,12 @@
 # Progress
 
+## Current update — file variants, filters and diagnostics
+
+- The PDF structure parser accepts LF/CRLF, optional whitespace and compact `/Type/XRef` syntax.
+- Library results can be filtered in SQLite by BKC, BKF or unknown type.
+- Technical conversion failures are no longer expanded in the main UI; a combined diagnostics file can be saved instead.
+- Scanner I/O failures are appended to the persistent application log and included in the exported diagnostics.
+
 ## Stage 1 — Mac Build Proof
 
 Status: source implementation complete; native macOS verification pending.
@@ -93,28 +100,132 @@ Status: implemented; frontend verified locally, native macOS build pending GitHu
 - Failed/cancelled/disconnected jobs can be retried and retain a technical report.
 - BKF rows display: “הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.” They never enter the converter.
 - Paths, sizes and progress use `u64`, and the engine remains streaming for files above 4 GB.
+- The full per-file conversion-card list was removed from the main screen. Conversion jobs still
+  run and persist in Rust, while the UI shows one compact aggregate progress panel, result counts,
+  retry for all failed jobs, the last completed PDF action, and diagnostics download.
 
 ### Stage 4 verification recorded
 
 - `pnpm test`: passed, 2 tests.
 - `pnpm build`: passed, TypeScript compiled and Vite transformed 21 modules.
+- Compact queue UI follow-up: `pnpm test` passed 2 tests and `pnpm build` passed on 2026-07-21.
 - Rust tests could not be executed on this restored Linux workspace because no Rust toolchain is
   installed. New Rust tests cover existing-file skip/rename, Hebrew filenames, BKF rejection, and
   queue recovery after reopening; they must run in the native GitHub Actions build.
 - Physical drive removal, real disk-full behavior, macOS privacy-denied destinations, cancellation
   during a real Golden conversion, and native open actions require the macOS build and real media.
-# BKC repair path (2026-07-21)
 
-- Received and hash-verified the matching pair `688840.book` / `688840.pdf`.
-- Verified `688840.book` is identical to the earlier sample (SHA-256 `8ff5bda4...805ba`).
-- Verified the supplied repaired PDF has 973 pages and the expected SHA-256
-  `a6488e53...924747`.
-- Added a real fallback path for unknown BKC prefixes: create a 200-byte-aligned
-  PDF probe, run Ghostscript `pdfwrite`, validate the rewritten PDF, and only then
-  atomically publish the output.
-- Kept the exact verified profile for `674817.book`; its recovered PDF hash and
-  506-page count were independently confirmed from the supplied source/output.
-- Frontend tests pass (2/2), production frontend build passes, and
-  `git diff --check` passes.
-- Rust compilation still requires GitHub Actions/macOS because this workspace has
-  no Rust toolchain. Do not mark the repair path released until that build runs.
+## Engine redevelopment — Step 1: Evidence preservation
+
+Status: complete and locally verified.
+
+- Added a versioned evidence manifest for the six supplied BOOK samples and the verified Golden PDF.
+- The manifest records byte size, SHA-256, observed magic, evidence status and only observations that
+  were already proven. It explicitly lists missing runtime evidence.
+- Binary books and the 115 MB Golden PDF remain external to Git.
+- Added a streaming verifier that fails on missing, changed or substituted evidence files.
+- No decoder behavior or support claim changed in this step.
+
+### Step 1 verification recorded
+
+- `node evidence/verify-evidence.mjs ../upload ..`: passed, 7/7 evidence files matched by size and
+  SHA-256.
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- Rust code was not changed. `cargo test` remains unavailable on the current host because no Rust
+  toolchain is installed.
+
+## Engine redevelopment — Step 2: Container probe and structural parsers
+
+Status: implemented; real-sample evidence passed and the Rust build was reported successful in the
+uploaded GitHub Actions run.
+
+- Added a standalone `bkf-container-probe` Rust crate inside the existing Tauri project.
+- Registered it as a dependency of the existing Tauri backend and exposed the read-only
+  `probe_book_structure` command; no second application or replacement project was created.
+- Classification uses file content, never the filename or extension.
+- BKC probing reads a bounded tail window, selects the final `startxref`, finds the physical XRef
+  stream object and following `%%EOF`, and reports `baseOffset` without decoding.
+- BKF probing reports only proven bounded-window evidence. Page-index status remains `unknown` and
+  BKF is never routed through the PDF parser.
+- Reports separate proven, hypothetical and unknown evidence and expose `decoderAvailable=false`.
+- Added an independent real-sample evidence runner and its machine-readable results.
+- Added the probe crate's unit-test command to the existing Apple Silicon workflow.
+
+### Step 2 verification recorded
+
+- `node evidence/probe-evidence.mjs ../upload evidence/probe-results.json`: passed on six samples.
+- Five samples classified as BKF with `pageIndexStatus=unknown` and no visible DjVu signature in the
+  bounded head window.
+- `688840.book`: BKC, `startxref=19726749`, `physicalXref=19740392`, `baseOffset=13643`, XRef object
+  `9225`, and `decoderAvailable=false`.
+- The first evidence-runner attempt selected the wrong object-header position and rejected the BKC;
+  header selection was corrected and the complete run then passed.
+- `node --check evidence/probe-evidence.mjs`: passed.
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- `git diff --check`: passed.
+- The project ZIP containing this step was uploaded by the user and its GitHub Actions run completed
+  successfully, confirming native Rust compilation and the macOS build. The exact run URL/id is not
+  recorded in this workspace.
+
+## Engine redevelopment — Step 2.1: Probe UI integration
+
+Status: implemented; frontend verified locally, updated native macOS build pending.
+
+- Added a per-file “בדיקת מבנה” action that invokes the existing Rust
+  `probe_book_structure` command on the selected library item.
+- The UI now displays the backend report kind, file size and `decoderAvailable` state.
+- BKC reports display `baseOffset`, `startxref`, `physicalXref`, and the XRef object number.
+- BKF reports display the page-index status and bounded-window DjVu signature result.
+- Removed the unconditional BKF warning. Unsupported-format guidance is now derived from the actual
+  probe result, so a BKC file can no longer be accompanied by a misleading BKF message.
+- No decoder or conversion support claim changed in this UI-only follow-up.
+
+### Step 2.1 verification recorded
+
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- `git diff --check`: passed.
+- Native validation required after upload: probing `688840.book` must display BKC with
+  `baseOffset=13643`, `startxref=19726749`, and `physicalXref=19740392`.
+
+## Engine redevelopment — Step 2.2: Safe structural report export
+
+Status: implemented; frontend verified locally, native Rust validation pending.
+
+- Continued without runtime hooking, process injection, drive-auth inspection, or interception of
+  decoder buffers.
+- Added a Rust-owned `export_probe_report` command that re-runs the structural probe and writes a
+  versioned JSON report. The frontend cannot manufacture or modify the reported probe result.
+- Reports contain only the source filename and size, structural findings, evidence classifications,
+  decoder availability and an explicit `structural-analysis-only` scope.
+- Added an expandable evidence/limitations section and a “הורדת דוח JSON” action to the probe UI.
+- No decoding, decryption, authorization, or conversion support claim changed in this step.
+
+### Step 2.2 verification recorded
+
+- `pnpm test`: passed, 2/2 tests.
+- `pnpm build`: passed; TypeScript compiled and Vite transformed 21 modules.
+- `git diff --check`: passed.
+- The current host still has no Rust toolchain; the registered Tauri command must compile in the
+  next native GitHub Actions run before this step is considered natively verified.
+
+## Audit reconciliation — 2026-07-21
+
+Status: source tree reconciled; native verification still requires GitHub Actions.
+
+- The structural probe crate is a direct dependency of the active Tauri backend.
+- `probe_book_structure` and `export_probe_report` are registered in the active
+  `generate_handler!` command list.
+- The React UI exposes “בדיקת מבנה” for library rows and “הורדת דוח JSON” for the selected report.
+- The Apple Silicon workflow runs the application Rust tests and the probe crate tests before
+  packaging `.app` and `.dmg` artifacts.
+- This source package does not claim a successful workflow run for the GitHub HEAD that existed
+  when the external audit was produced. A new workflow run is the release gate.
+- Historical commit identifiers describe earlier local development branches and are not presented
+  as the current GitHub `main` history.
+- The previously written Ghostscript fallback is retained in the unified source tree. It is used
+  only after an unknown BKC profile is detected, validates the rewritten PDF before publication,
+  and removes temporary files on failure. It remains unverified natively and Ghostscript is not
+  bundled in the DMG.

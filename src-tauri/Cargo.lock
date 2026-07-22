@@ -27,6 +27,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "bkf-container-probe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bkf-scanner-core"
 version = "0.1.0"
 dependencies = [
@@ -145,6 +152,7 @@ dependencies = [
 name = "bkf-ai"
 version = "0.1.0"
 dependencies = [
+ "bkf-container-probe",
  "bkf-converter-core",
  "bkf-scanner-core",
  "rusqlite",
