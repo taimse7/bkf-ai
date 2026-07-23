@@ -204,7 +204,7 @@ where
             flush(catalog, &mut batch)?;
         }
 
-        if state.scanned % 500 == 0 {
+        if state.scanned.is_multiple_of(500) {
             catalog.update_scan(
                 &scan_id,
                 "running",

@@ -38,7 +38,9 @@ impl std::fmt::Display for ConversionError {
             Self::Io(error) => write!(formatter, "{error}"),
             Self::InvalidBkc(reason) => write!(formatter, "BKC לא תקין: {reason}"),
             Self::UnknownDecoderProfile => formatter.write_str("וריאנט BKC אינו מוכר"),
-            Self::RepairUnavailable(reason) => write!(formatter, "מנוע תיקון PDF אינו זמין: {reason}"),
+            Self::RepairUnavailable(reason) => {
+                write!(formatter, "מנוע תיקון PDF אינו זמין: {reason}")
+            }
             Self::UnsafeOutput(reason) => write!(formatter, "יעד פלט אינו בטוח: {reason}"),
             Self::InvalidPdf(reason) => write!(formatter, "אימות PDF נכשל: {reason}"),
             Self::Cancelled => formatter.write_str("ההמרה בוטלה בבטחה"),
@@ -152,9 +154,7 @@ where
         ));
     }
     if output.exists() {
-        return Err(ConversionError::UnsafeOutput(
-            "קובץ היעד כבר קיים".into(),
-        ));
+        return Err(ConversionError::UnsafeOutput("קובץ היעד כבר קיים".into()));
     }
 
     let mut source = File::open(&canonical_input)?;
@@ -184,9 +184,7 @@ where
         *byte ^= mask;
     }
     if !decoded.starts_with(b"%PDF-") {
-        return Err(ConversionError::InvalidPdf(
-            "כותרת PDF לא שוחזרה".into(),
-        ));
+        return Err(ConversionError::InvalidPdf("כותרת PDF לא שוחזרה".into()));
     }
 
     let temporary = temporary_path(output);
@@ -203,13 +201,18 @@ where
         progress(PREFIX_LEN as u64);
 
         source.seek(SeekFrom::Start(structure.base_offset + PREFIX_LEN as u64))?;
-        copy_streaming(&mut source, &mut writer, structure.base_offset, &mut progress, &cancelled)?;
+        copy_streaming(
+            &mut source,
+            &mut writer,
+            structure.base_offset,
+            &mut progress,
+            &cancelled,
+        )?;
         writer.flush()?;
         writer.get_ref().sync_all()?;
         drop(writer);
 
-        let (output_size, page_count, sha256) =
-            validate_pdf(&temporary, structure.startxref)?;
+        let (output_size, page_count, sha256) = validate_pdf(&temporary, structure.startxref)?;
         fs::rename(&temporary, output)?;
         Ok(ConversionReport {
             decoder_profile: profile.name.into(),
@@ -243,8 +246,8 @@ fn read_structure(source: &mut File, input_size: u64) -> Result<BkcStructure, Co
     source.seek(SeekFrom::Start(tail_start))?;
     let mut tail = Vec::with_capacity((input_size - tail_start) as usize);
     source.read_to_end(&mut tail)?;
-    let startxref_marker = rfind(&tail, b"startxref")
-        .ok_or(ConversionError::InvalidBkc("startxref לא נמצא"))?;
+    let startxref_marker =
+        rfind(&tail, b"startxref").ok_or(ConversionError::InvalidBkc("startxref לא נמצא"))?;
     let startxref = parse_decimal_line(&tail[startxref_marker + b"startxref".len()..])
         .ok_or(ConversionError::InvalidBkc("ערך startxref אינו תקין"))?;
     let xref_type = rfind_xref_type(&tail[..startxref_marker])
@@ -321,10 +324,7 @@ where
             .arg(&probe)
             .status()
             .map_err(|error| {
-                ConversionError::RepairUnavailable(format!(
-                    "{} ({error})",
-                    executable.display()
-                ))
+                ConversionError::RepairUnavailable(format!("{} ({error})", executable.display()))
             })?;
 
         if !status.success() {
@@ -337,8 +337,7 @@ where
         }
 
         let repaired_startxref = read_pdf_startxref(&repaired)?;
-        let (output_size, page_count, sha256) =
-            validate_pdf(&repaired, repaired_startxref)?;
+        let (output_size, page_count, sha256) = validate_pdf(&repaired, repaired_startxref)?;
         fs::rename(&repaired, output)?;
         progress(input_size.saturating_sub(structure.base_offset));
 
@@ -415,8 +414,8 @@ fn select_profile(encoded: &[u8; PREFIX_LEN]) -> Result<DecoderProfile, Conversi
     if hex_lower(&Sha256::digest(encoded)) != GOLDEN_ENCODED_PREFIX_SHA256 {
         return Err(ConversionError::UnknownDecoderProfile);
     }
-    let bytes = decode_hex(GOLDEN_PREFIX_XOR_MASK_HEX)
-        .ok_or(ConversionError::UnknownDecoderProfile)?;
+    let bytes =
+        decode_hex(GOLDEN_PREFIX_XOR_MASK_HEX).ok_or(ConversionError::UnknownDecoderProfile)?;
     let mask: [u8; PREFIX_LEN] = bytes
         .try_into()
         .map_err(|_| ConversionError::UnknownDecoderProfile)?;
@@ -433,9 +432,7 @@ fn validate_pdf(
     let file = File::open(path)?;
     let size = file.metadata()?.len();
     if expected_startxref >= size {
-        return Err(ConversionError::InvalidPdf(
-            "startxref מחוץ לקובץ".into(),
-        ));
+        return Err(ConversionError::InvalidPdf("startxref מחוץ לקובץ".into()));
     }
 
     let mut reader = BufReader::with_capacity(COPY_BUFFER, file);
@@ -497,7 +494,7 @@ fn count_page_starts(bytes: &[u8], max_starts: usize) -> u64 {
                 && *window == needle
                 && bytes
                     .get(index + needle.len())
-                    .map_or(true, |byte| *byte != b's')
+                    .is_none_or(|byte| *byte != b's')
         })
         .count() as u64
 }
@@ -508,7 +505,9 @@ fn temporary_path(output: &Path) -> PathBuf {
 }
 
 fn rfind(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).rposition(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .rposition(|window| window == needle)
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -540,7 +539,7 @@ fn rfind_xref_type(bytes: &[u8]) -> Option<usize> {
             let start = rest.iter().position(|byte| !byte.is_ascii_whitespace())?;
             rest[start..].starts_with(b"/XRef").then_some(index)
         })
-        .last()
+        .next_back()
 }
 
 fn find_object_start(bytes: &[u8]) -> Option<usize> {
@@ -560,7 +559,7 @@ fn find_object_start(bytes: &[u8]) -> Option<usize> {
 }
 
 fn decode_hex(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return None;
     }
     value
@@ -601,7 +600,14 @@ mod tests {
         let input = temp.path().join("sample.book");
         let output_dir = tempfile::tempdir().unwrap();
         let output = output_dir.path().join("sample.pdf");
-        fs::write(&input, [b'B', b'K', b'F'].into_iter().chain(std::iter::repeat(0).take(300)).collect::<Vec<_>>()).unwrap();
+        fs::write(
+            &input,
+            [b'B', b'K', b'F']
+                .into_iter()
+                .chain(std::iter::repeat(0).take(300))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
         assert!(matches!(
             convert_bkc(&input, &output),
             Err(ConversionError::InvalidBkc(_))

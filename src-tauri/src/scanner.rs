@@ -244,7 +244,7 @@ fn scan_directory(
         if pending.len() >= 500 {
             flush(&mut connection, &run.id, &mut pending)?;
         }
-        if scanned % 250 == 0 {
+        if scanned.is_multiple_of(250) {
             update_scan(&connection, &run.id, "running", scanned, errors, now_ms())?;
             emit_progress(app, run, "running", scanned, errors, Some(relative_path));
         }

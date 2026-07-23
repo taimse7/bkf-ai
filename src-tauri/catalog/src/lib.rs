@@ -107,7 +107,9 @@ impl Catalog {
             .and_then(|value| value.to_str())
             .filter(|value| !value.is_empty())
             .unwrap_or("מאגר");
-        let name = display_name.filter(|value| !value.trim().is_empty()).unwrap_or(default_name);
+        let name = display_name
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(default_name);
 
         connection.execute(
             "INSERT INTO repositories(id, display_name, root_path, scan_status, created_ms)
@@ -335,12 +337,19 @@ impl Catalog {
     ) -> rusqlite::Result<DocumentPage> {
         let connection = self.connect()?;
         let ids = if repository_ids.is_empty() {
-            self.list_repositories()?.into_iter().map(|item| item.id).collect::<Vec<_>>()
+            self.list_repositories()?
+                .into_iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>()
         } else {
             repository_ids.to_vec()
         };
         if ids.is_empty() {
-            return Ok(DocumentPage { items: Vec::new(), total: 0, offset });
+            return Ok(DocumentPage {
+                items: Vec::new(),
+                total: 0,
+                offset,
+            });
         }
 
         let placeholders = (0..ids.len()).map(|_| "?").collect::<Vec<_>>().join(",");
@@ -380,8 +389,7 @@ impl Catalog {
              ORDER BY d.name COLLATE NOCASE, d.relative_path COLLATE NOCASE
              LIMIT ? OFFSET ?"
         );
-        let mut values: Vec<rusqlite::types::Value> =
-            ids.into_iter().map(Into::into).collect();
+        let mut values: Vec<rusqlite::types::Value> = ids.into_iter().map(Into::into).collect();
         values.push(pattern.into());
         values.push(format_filter.to_string().into());
         values.push(format_filter.to_string().into());
@@ -393,7 +401,11 @@ impl Catalog {
             .query_map(rusqlite::params_from_iter(values), map_document)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
-        Ok(DocumentPage { items, total, offset })
+        Ok(DocumentPage {
+            items,
+            total,
+            offset,
+        })
     }
 
     pub fn document(&self, id: &str) -> rusqlite::Result<Option<Document>> {
@@ -482,7 +494,9 @@ mod tests {
         let temp = tempdir().unwrap();
         let catalog = Catalog::open(temp.path().join("library.sqlite3")).unwrap();
         let first = catalog.add_repository("/tmp/one", Some("אחד"), 1).unwrap();
-        let second = catalog.add_repository("/tmp/two", Some("שתיים"), 1).unwrap();
+        let second = catalog
+            .add_repository("/tmp/two", Some("שתיים"), 1)
+            .unwrap();
         assert_ne!(first.id, second.id);
 
         let mut rows = Vec::new();
@@ -494,7 +508,7 @@ mod tests {
                 relative_path: format!("{index:05}.book"),
                 size: index as u64,
                 modified_ms: Some(index as i64),
-                format: if index % 2 == 0 { "BKC" } else { "BKF" }.into(),
+                format: if index.is_multiple_of(2) { "BKC" } else { "BKF" }.into(),
                 status: "ready".into(),
                 support_status: "unknown".into(),
                 seen_generation: 1,
