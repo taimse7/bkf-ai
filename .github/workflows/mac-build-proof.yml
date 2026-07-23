@@ -52,8 +52,23 @@ jobs:
           pnpm plugin:build
           pnpm plugin:package
 
-      - name: Rust format
+      - name: Apply Rust formatting
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+          git diff -- src-tauri > rustfmt.patch
+          ditto -c -k --sequesterRsrc --keepParent src-tauri formatted-src-tauri.zip
+
+      - name: Verify Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Upload formatted Rust sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: bkf-ai-rustfmt-output
+          path: |
+            rustfmt.patch
+            formatted-src-tauri.zip
+          if-no-files-found: error
 
       - name: Rust clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets -- -D warnings
