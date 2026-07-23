@@ -1,523 +1,393 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import {
+  BookOpen,
+  Database,
+  Moon,
+  PanelRightClose,
+  PanelRightOpen,
+  Settings,
+  Sun
+} from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { visibleRange } from "./virtualization";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  addRepository,
+  bootstrap,
+  cancelScan,
+  exportPdf,
+  indexDocument,
+  listDocuments,
+  listRepositories,
+  openLocalPath,
+  preparePreview,
+  scanRepository,
+  searchLibrary
+} from "./api";
+import { useDebouncedValue } from "./hooks/useDebouncedValue";
+import { LibraryPanel } from "./components/LibraryPanel";
+import { ViewerPanel } from "./components/ViewerPanel";
+import { StatusBar } from "./components/StatusBar";
+import type {
+  BootstrapInfo,
+  DocumentItem,
+  DocumentPage,
+  Repository,
+  ScanProgress,
+  SearchHit,
+  ViewerTab
+} from "./types";
 
-type FileType = "BKC" | "BKF" | "Unknown";
+const EMPTY_PAGE: DocumentPage = { items: [], total: 0, offset: 0 };
 
-interface LibraryItem {
-  name: string;
-  relativePath: string;
-  size: number;
-  fileType: FileType;
-  modifiedMs: number | null;
-  status: string;
-  selected: boolean;
-}
-
-interface LibraryPage {
-  items: LibraryItem[];
-  total: number;
-  offset: number;
-}
-
-interface ScanRun {
-  id: string;
-  rootPath: string;
-  status: string;
-  scanned: number;
-  errors: number;
-  generation: number;
-}
-
-interface ScanProgress {
-  scanId: string;
-  status: string;
-  scanned: number;
-  errors: number;
-  currentPath: string | null;
-}
-
-interface ConversionJob {
-  id: string; inputPath: string; outputPath: string; name: string; fileType: FileType;
-  totalBytes: number; processedBytes: number; status: string; error: string | null;
-  technicalReport: string | null;
-}
-
-interface ProbeReport {
-  formatVersion: number;
-  kind: "bkc" | "bkf" | "unknown";
-  fileSize: number;
-  bkc: {
-    startxref: number;
-    physicalXref: number;
-    baseOffset: number;
-    xrefObjectNumber: number;
-    eofPhysicalOffset: number;
-  } | null;
-  bkf: {
-    standardDjvuSignatureVisible: boolean;
-    pageIndexStatus: string;
-  } | null;
-  decoderAvailable: boolean;
-  evidence: Array<{
-    status: "proven" | "hypothesis" | "unknown";
-    key: string;
-    detail: string;
-  }>;
-}
-
-interface ProbeSelection {
-  name: string;
-  inputPath: string;
-  report: ProbeReport;
-}
-
-const ROW_HEIGHT = 58;
-const PAGE_SIZE = 240;
-
-const statusLabels: Record<string, string> = {
-  running: "סורק",
-  completed: "הושלם",
-  completed_with_errors: "הושלם עם שגיאות",
-  cancelled: "בוטל",
-  disconnected: "הכונן נותק",
-  permission_denied: "אין הרשאה",
-  read_error: "שגיאת קריאה",
-  ready: "מוכן",
-  queued: "ממתין בתור",
-  failed: "נכשל",
-  skipped: "דולג — כבר קיים",
-  unsupported: "לא נתמך",
-};
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let value = bytes / 1024;
-  let unit = units[0];
-  for (let index = 1; value >= 1024 && index < units.length; index += 1) {
-    value /= 1024;
-    unit = units[index];
-  }
-  return `${value.toLocaleString("he-IL", { maximumFractionDigits: 1 })} ${unit}`;
-}
-
-function App() {
-  const [run, setRun] = useState<ScanRun | null>(null);
-  const [items, setItems] = useState<Map<number, LibraryItem>>(new Map());
-  const [total, setTotal] = useState(0);
-  const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(520);
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [nameQuery, setNameQuery] = useState("");
-  const [fileTypeFilter, setFileTypeFilter] = useState<"" | FileType>("");
-  const [destination, setDestination] = useState("");
-  const [collisionPolicy, setCollisionPolicy] = useState<"skip" | "rename">("skip");
-  const [queue, setQueue] = useState<ConversionJob[]>([]);
-  const [probe, setProbe] = useState<ProbeSelection | null>(null);
-  const [probingPath, setProbingPath] = useState<string | null>(null);
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const queryRef = useRef("");
-  const typeFilterRef = useRef<"" | FileType>("");
+export default function App() {
+  const [bootstrapInfo, setBootstrapInfo] = useState<BootstrapInfo | null>(null);
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [selectedRepositoryIds, setSelectedRepositoryIds] = useState<string[]>([]);
+  const [documentPage, setDocumentPage] = useState<DocumentPage>(EMPTY_PAGE);
+  const [documents, setDocuments] = useState<Map<number, DocumentItem>>(new Map());
+  const [libraryQuery, setLibraryQuery] = useState("");
+  const [formatFilter, setFormatFilter] = useState("");
+  const [mode, setMode] = useState<"library" | "search">("library");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
+  const [tabs, setTabs] = useState<ViewerTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [dark, setDark] = useState(false);
+  const [message, setMessage] = useState("מוכן");
+  const [libraryWidth, setLibraryWidth] = useState(390);
+  const [resizing, setResizing] = useState(false);
   const loadedPages = useRef(new Set<number>());
 
-  const loadPage = useCallback(async (scanId: string, offset: number, query: string, force = false) => {
-    const pageOffset = Math.floor(offset / PAGE_SIZE) * PAGE_SIZE;
+  const debouncedLibraryQuery = useDebouncedValue(libraryQuery, 180);
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 180);
+
+  const refreshRepositories = useCallback(async () => {
+    const rows = await listRepositories();
+    setRepositories(rows);
+    setSelectedRepositoryIds((current) => {
+      const valid = current.filter((id) => rows.some((row) => row.id === id));
+      return valid.length > 0 ? valid : rows.map((row) => row.id);
+    });
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void Promise.all([bootstrap(), listRepositories()])
+      .then(([info, rows]) => {
+        if (!active) return;
+        setBootstrapInfo(info);
+        setRepositories(rows);
+        setSelectedRepositoryIds(rows.map((row) => row.id));
+      })
+      .catch((reason: unknown) => setMessage(`שגיאת אתחול: ${String(reason)}`));
+
+    const unlisten = listen<ScanProgress>("repository-scan-progress", ({ payload }) => {
+      setScanProgress(payload);
+      if (payload.status !== "running") {
+        loadedPages.current.clear();
+        void refreshRepositories();
+      }
+    });
+
+    return () => {
+      active = false;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, [refreshRepositories]);
+
+  const loadDocumentPage = useCallback(async (offset: number, force = false) => {
+    const pageOffset = Math.floor(offset / 200) * 200;
     if (!force && loadedPages.current.has(pageOffset)) return;
     loadedPages.current.add(pageOffset);
+
     try {
-      const page = await invoke<LibraryPage>("get_library_page", {
-        scanId,
+      const page = await listDocuments({
+        repositoryIds: selectedRepositoryIds,
+        query: debouncedLibraryQuery,
+        format: formatFilter,
         offset: pageOffset,
-        limit: PAGE_SIZE,
-        nameQuery: query,
-        fileType: typeFilterRef.current,
+        limit: 200
       });
-      if (query !== queryRef.current) return;
-      setTotal(page.total);
-      setItems((current) => {
+      setDocumentPage(page);
+      setDocuments((current) => {
         const next = new Map(current);
         page.items.forEach((item, index) => next.set(page.offset + index, item));
         return next;
       });
     } catch (reason) {
       loadedPages.current.delete(pageOffset);
-      showFriendlyError(reason);
+      setMessage(`טעינת הספרייה נכשלה: ${String(reason)}`);
     }
-  }, []);
-
-  const resetLibrary = useCallback((scan: ScanRun) => {
-    setRun(scan);
-    setItems(new Map());
-    setTotal(0);
-    loadedPages.current.clear();
-    queryRef.current = "";
-    setNameQuery("");
-    void loadPage(scan.id, 0, "", true);
-  }, [loadPage]);
+  }, [selectedRepositoryIds, debouncedLibraryQuery, formatFilter]);
 
   useEffect(() => {
+    loadedPages.current.clear();
+    setDocuments(new Map());
+    setDocumentPage(EMPTY_PAGE);
+    if (selectedRepositoryIds.length > 0) void loadDocumentPage(0, true);
+  }, [selectedRepositoryIds, debouncedLibraryQuery, formatFilter, loadDocumentPage]);
+
+  useEffect(() => {
+    if (
+      scanProgress &&
+      scanProgress.status !== "running" &&
+      selectedRepositoryIds.includes(scanProgress.repositoryId)
+    ) {
+      loadedPages.current.clear();
+      void loadDocumentPage(0, true);
+    }
+  }, [scanProgress?.status, scanProgress?.repositoryId, selectedRepositoryIds, loadDocumentPage]);
+
+  useEffect(() => {
+    if (!debouncedSearchQuery.trim() || selectedRepositoryIds.length === 0) {
+      setSearchHits([]);
+      setSearchLoading(false);
+      return;
+    }
     let active = true;
-    const initialise = async () => {
-      try {
-        const scan = await invoke<ScanRun | null>("resume_last_scan");
-        if (active && scan) resetLibrary(scan);
-      } catch (reason) {
-        if (active) showFriendlyError(reason);
-      } finally {
-        if (active) setBusy(false);
-      }
-    };
-    void initialise();
-    const unlisten = listen<ScanProgress>("scan-progress", ({ payload }) => {
-      setRun((current) => current?.id === payload.scanId ? {
-        ...current,
-        status: payload.status,
-        scanned: payload.scanned,
-        errors: payload.errors,
-      } : current);
-      if (payload.scanned % 1000 === 0 || payload.status !== "running") {
-        loadedPages.current.clear();
-        setRun((current) => {
-          if (current?.id === payload.scanId) void loadPage(current.id, 0, queryRef.current, true);
-          return current;
-        });
-      }
-    });
-    const conversionUnlisten = listen<ConversionJob[]>("conversion-progress", ({ payload }) => setQueue(payload));
-    void invoke<ConversionJob[]>("resume_conversion_queue").then((jobs) => active && setQueue(jobs)).catch((reason) => active && showFriendlyError(reason));
+    setSearchLoading(true);
+    void searchLibrary({
+      query: debouncedSearchQuery,
+      repositoryIds: selectedRepositoryIds,
+      limit: 100
+    })
+      .then((hits) => active && setSearchHits(hits))
+      .catch((reason: unknown) => active && setMessage(`החיפוש נכשל: ${String(reason)}`))
+      .finally(() => active && setSearchLoading(false));
     return () => {
       active = false;
-      void unlisten.then((dispose) => dispose());
-      void conversionUnlisten.then((dispose) => dispose());
     };
-  }, [loadPage, resetLibrary]);
+  }, [debouncedSearchQuery, selectedRepositoryIds]);
 
   useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const observer = new ResizeObserver(([entry]) => setViewportHeight(entry.contentRect.height));
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
+    if (!resizing) return;
+    const move = (event: MouseEvent) => {
+      const width = Math.min(620, Math.max(320, window.innerWidth - event.clientX));
+      setLibraryWidth(width);
+    };
+    const stop = () => setResizing(false);
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", stop);
+    };
+  }, [resizing]);
 
-  const range = useMemo(
-    () => visibleRange(total, ROW_HEIGHT, scrollTop, viewportHeight, 8),
-    [total, scrollTop, viewportHeight],
-  );
-
-  useEffect(() => {
-    if (run && total > 0) void loadPage(run.id, range.start, queryRef.current);
-  }, [loadPage, range.start, run, total]);
-
-  useEffect(() => {
-    queryRef.current = nameQuery;
-    typeFilterRef.current = fileTypeFilter;
-    if (!run) return;
-    const timer = window.setTimeout(() => {
-      loadedPages.current.clear();
-      setItems(new Map());
-      setTotal(0);
-      setScrollTop(0);
-      if (viewportRef.current) viewportRef.current.scrollTop = 0;
-      void loadPage(run.id, 0, nameQuery, true);
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [fileTypeFilter, loadPage, nameQuery, run?.id]);
-
-  const showFriendlyError = (reason: unknown) => {
-    console.error(reason);
-    setError("הפעולה לא הושלמה. אפשר להוריד את קובץ האבחון ולצרף אותו לבדיקה.");
-  };
-
-  const downloadLog = async () => {
-    const target = await save({ title: "שמירת קובץ אבחון", defaultPath: "bkf-ai-diagnostics.log" });
-    if (!target) return;
-    try {
-      await invoke("export_diagnostics", { outputPath: target });
-      setError(null);
-    } catch (reason) { showFriendlyError(reason); }
-  };
-
-  const chooseSource = async () => {
-    setError(null);
-    const selected = await open({ directory: true, multiple: false, title: "בחירת תיקיית מקור או כונן" });
+  const handleAddRepository = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "בחירת מאגר BKC/BKF"
+    });
     if (!selected || Array.isArray(selected)) return;
-    setBusy(true);
     try {
-      const scan = await invoke<ScanRun>("start_scan", { sourcePath: selected });
-      resetLibrary(scan);
+      const repository = await addRepository(selected);
+      await refreshRepositories();
+      setSelectedRepositoryIds((current) => [...new Set([...current, repository.id])]);
+      await scanRepository(repository.id);
+      setMessage("המאגר נוסף והסריקה התחילה");
     } catch (reason) {
-      showFriendlyError(reason);
-    } finally {
-      setBusy(false);
+      setMessage(`הוספת המאגר נכשלה: ${String(reason)}`);
     }
   };
 
-  const cancel = async () => {
-    if (run) await invoke("cancel_scan", { scanId: run.id });
-  };
-
-  const chooseDestination = async () => {
-    const selected = await open({ directory: true, multiple: false, title: "בחירת תיקיית יעד ל־PDF" });
-    if (selected && !Array.isArray(selected)) setDestination(selected);
-  };
-
-  const enqueue = async (relativePaths: string[], allSupported = false) => {
-    if (!run || !destination) { setError("יש לבחור תיקיית יעד לפני ההמרה"); return; }
-    setError(null);
+  const handleOpenDocument = async (document: DocumentItem, page = 1) => {
+    setMessage(`מכין תצוגה: ${document.name}`);
     try {
-      setQueue(await invoke<ConversionJob[]>("enqueue_conversions", {
-        scanId: run.id, relativePaths, allSupported, destinationPath: destination, collisionPolicy,
-      }));
-    } catch (reason) { showFriendlyError(reason); }
-  };
-
-  const retryFailed = async () => {
-    const failed = queue.filter((job) => ["failed", "cancelled", "disconnected"].includes(job.status));
-    try {
-      for (const job of failed) {
-        await invoke<ConversionJob[]>("retry_conversion", { id: job.id });
+      const preview = await preparePreview(document.id);
+      const existing = tabs.find((tab) => tab.documentId === document.id);
+      if (existing) {
+        setTabs((current) =>
+          current.map((tab) => tab.tabId === existing.tabId
+            ? { ...tab, ...preview, currentPage: Math.max(1, page) }
+            : tab)
+        );
+        setActiveTabId(existing.tabId);
+      } else {
+        const tab: ViewerTab = {
+          ...preview,
+          tabId: crypto.randomUUID(),
+          currentPage: Math.max(1, page)
+        };
+        setTabs((current) => [...current, tab]);
+        setActiveTabId(tab.tabId);
       }
-    } catch (reason) { showFriendlyError(reason); }
-  };
-
-  const openPath = async (path: string) => {
-    try { await invoke("open_local_path", { path }); } catch (reason) { showFriendlyError(reason); }
-  };
-
-  const probeItem = async (item: LibraryItem) => {
-    if (!run) return;
-    setError(null);
-    setProbingPath(item.relativePath);
-    try {
-      const separator = run.rootPath.endsWith("/") ? "" : "/";
-      const report = await invoke<ProbeReport>("probe_book_structure", {
-        inputPath: `${run.rootPath}${separator}${item.relativePath}`,
-      });
-      setProbe({ name: item.name, inputPath: `${run.rootPath}${separator}${item.relativePath}`, report });
+      setMessage(preview.message ?? "המסמך מוכן");
     } catch (reason) {
-      showFriendlyError(reason);
-    } finally {
-      setProbingPath(null);
+      setMessage(`פתיחת המסמך נכשלה: ${String(reason)}`);
     }
   };
 
-  const exportProbe = async () => {
-    if (!probe) return;
-    const safeName = probe.name.replace(/[^\p{L}\p{N}._-]+/gu, "-");
+  const handleOpenSearchHit = async (hit: SearchHit) => {
+    const document = [...documents.values()].find((item) => item.id === hit.documentId);
+    if (document) {
+      await handleOpenDocument(document, hit.pageIndex + 1);
+      return;
+    }
+    const page = await listDocuments({
+      repositoryIds: [hit.repositoryId],
+      query: hit.documentName,
+      format: "",
+      offset: 0,
+      limit: 20
+    });
+    const found = page.items.find((item) => item.id === hit.documentId);
+    if (found) await handleOpenDocument(found, hit.pageIndex + 1);
+  };
+
+  const handleExportDocument = async (document: DocumentItem) => {
     const target = await save({
-      title: "שמירת דוח בדיקת מבנה",
-      defaultPath: `${safeName}.probe.json`,
+      title: "יצוא ל־PDF",
+      defaultPath: `${document.name.replace(/\.[^.]+$/, "")}.pdf`
     });
     if (!target) return;
     try {
-      await invoke("export_probe_report", { inputPath: probe.inputPath, outputPath: target });
-      setError(null);
+      await exportPdf(document.id, target);
+      setMessage("ה־PDF נשמר בהצלחה");
     } catch (reason) {
-      showFriendlyError(reason);
+      setMessage(`היצוא נכשל: ${String(reason)}`);
     }
   };
 
-  const toggleSelected = async (index: number, item: LibraryItem) => {
-    if (!run) return;
-    const selected = !item.selected;
-    setItems((current) => new Map(current).set(index, { ...item, selected }));
+  const handleExportTab = async (tab: ViewerTab) => {
+    const document = [...documents.values()].find((item) => item.id === tab.documentId);
+    if (document) await handleExportDocument(document);
+  };
+
+  const handleIndexDocument = async (document: DocumentItem) => {
+    setMessage(`מאנדקס טקסט: ${document.name}`);
     try {
-      await invoke("update_selected", {
-        scanId: run.id,
-        relativePath: item.relativePath,
-        selected,
-      });
+      const pages = await indexDocument(document.id);
+      setMessage(`${pages.toLocaleString("he-IL")} עמודים נוספו לאינדקס`);
+      loadedPages.current.clear();
+      await loadDocumentPage(0, true);
+      if (searchQuery.trim()) {
+        setSearchHits(await searchLibrary({
+          query: searchQuery,
+          repositoryIds: selectedRepositoryIds,
+          limit: 100
+        }));
+      }
     } catch (reason) {
-      setItems((current) => new Map(current).set(index, item));
-      showFriendlyError(reason);
+      setMessage(`אינדוקס הטקסט נכשל: ${String(reason)}`);
     }
   };
 
-  const visibleRows = [];
-  for (let index = range.start; index < range.end; index += 1) {
-    const item = items.get(index);
-    visibleRows.push(
-      <div className="library-row" style={{ transform: `translateY(${index * ROW_HEIGHT}px)` }} key={index}>
-        {item ? (
-          <>
-            <label className="check-cell" aria-label={`סימון ${item.name}`}>
-              <input type="checkbox" checked={item.selected} onChange={() => void toggleSelected(index, item)} />
-            </label>
-            <strong className="ellipsis" title={item.name}>{item.name}</strong>
-            <span className="ellipsis path" title={item.relativePath} dir="auto">{item.relativePath}</span>
-            <span dir="ltr">{formatSize(item.size)}</span>
-            <span className={`type type-${item.fileType.toLowerCase()}`}>{item.fileType}</span>
-            <time>{item.modifiedMs ? new Date(item.modifiedMs).toLocaleString("he-IL") : "—"}</time>
-            <span className={`item-status status-${item.status}`}>{statusLabels[item.status] ?? item.status}</span>
-            <div className="row-actions">
-              <button className="row-action" onClick={() => void probeItem(item)} disabled={probingPath !== null}>
-                {probingPath === item.relativePath ? "בודק…" : "בדיקת מבנה"}
-              </button>
-              {item.fileType === "BKC" && <button className="row-action" onClick={() => void enqueue([item.relativePath])} disabled={!destination}>המרה</button>}
-              {item.fileType === "BKF" && <span className="bkf-note" title="הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא.">אין מפענח</span>}
-            </div>
-          </>
-        ) : <span className="row-loading">טוען רשומה…</span>}
-      </div>,
-    );
-  }
+  const activeTab = useMemo(
+    () => tabs.find((tab) => tab.tabId === activeTabId) ?? null,
+    [tabs, activeTabId]
+  );
 
-  const isRunning = run?.status === "running";
-  const activeConversion = queue.find((job) => job.status === "running");
-  const completedConversions = queue.filter((job) => job.status === "completed");
-  const finishedConversions = queue.filter((job) => ["completed", "skipped", "unsupported", "failed", "cancelled", "disconnected"].includes(job.status));
-  const failedConversions = queue.filter((job) => ["failed", "cancelled", "disconnected"].includes(job.status));
-  const lastCompleted = completedConversions.at(-1);
+  const closeTab = (id: string) => {
+    setTabs((current) => {
+      const index = current.findIndex((tab) => tab.tabId === id);
+      const next = current.filter((tab) => tab.tabId !== id);
+      if (activeTabId === id) {
+        setActiveTabId(next[Math.max(0, index - 1)]?.tabId ?? null);
+      }
+      return next;
+    });
+  };
+
+  const toggleFullscreen = async () => {
+    const window = getCurrentWindow();
+    await window.setFullscreen(!(await window.isFullscreen()));
+  };
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Scanner and Library UI</p>
-          <h1>ספריית BKF AI</h1>
+    <main className={`app ${dark ? "theme-dark" : ""} ${focusMode ? "focus-mode" : ""}`}>
+      <header className="top-bar">
+        <div className="brand">
+          <BookOpen size={22} />
+          <strong>BKF AI</strong>
+          <span>ספריית BKC/BKF</span>
         </div>
-        <div className="actions">
-          {isRunning && <button className="secondary danger" onClick={() => void cancel()}>ביטול סריקה</button>}
-          <button className="primary" onClick={() => void chooseSource()} disabled={busy || isRunning}>
-            בחירת תיקייה או כונן
+
+        <div className="top-actions">
+          <button title="מאגרים" onClick={handleAddRepository}>
+            <Database size={17} />
+            הוסף מאגר
+          </button>
+          <button title="הצג או הסתר ספרייה" onClick={() => setFocusMode((value) => !value)}>
+            {focusMode ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
+          </button>
+          <button title="מצב בהיר או כהה" onClick={() => setDark((value) => !value)}>
+            {dark ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
+          <button title="הגדרות">
+            <Settings size={17} />
           </button>
         </div>
       </header>
 
-      <section className="source-card" aria-live="polite">
-        <div>
-          <span className="label">מקור לקריאה בלבד</span>
-          <strong className="source-path" dir="auto">{run?.rootPath ?? "טרם נבחר מקור"}</strong>
-        </div>
-        <div className="scan-metrics">
-          <span>{statusLabels[run?.status ?? ""] ?? (busy ? "טוען" : "ממתין")}</span>
-          <strong>{(run?.scanned ?? 0).toLocaleString("he-IL")} קבצים</strong>
-          {(run?.errors ?? 0) > 0 && <span className="error-count">חלק מהקבצים לא נקראו</span>}
-        </div>
-      </section>
+      <div className="workspace">
+        <ViewerPanel
+          tabs={tabs}
+          activeTabId={activeTabId}
+          focusMode={focusMode}
+          zoom={zoom}
+          onActiveTab={setActiveTabId}
+          onCloseTab={closeTab}
+          onToggleFocus={() => setFocusMode((value) => !value)}
+          onToggleFullscreen={() => void toggleFullscreen()}
+          onZoomChange={setZoom}
+          onPageChange={(tabId, page) =>
+            setTabs((current) => current.map((tab) => tab.tabId === tabId ? { ...tab, currentPage: page } : tab))
+          }
+          onPageCount={(tabId, count) =>
+            setTabs((current) => current.map((tab) => tab.tabId === tabId ? { ...tab, pageCount: count } : tab))
+          }
+          onExport={(tab) => void handleExportTab(tab)}
+          onOpenPath={(path) => void openLocalPath(path)}
+        />
 
-      {error && <div className="error-banner" role="alert"><span>{error}</span><button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button></div>}
+        {!focusMode && (
+          <>
+            <div className="splitter" onMouseDown={() => setResizing(true)} />
+            <div style={{ width: libraryWidth, minWidth: libraryWidth }}>
+              <LibraryPanel
+                repositories={repositories}
+                selectedRepositoryIds={selectedRepositoryIds}
+                onRepositorySelectionChange={setSelectedRepositoryIds}
+                onAddRepository={() => void handleAddRepository()}
+                onScanRepository={(id) => void scanRepository(id)}
+                documents={documents}
+                documentPage={documentPage}
+                onLoadDocumentPage={(offset) => void loadDocumentPage(offset)}
+                libraryQuery={libraryQuery}
+                onLibraryQueryChange={setLibraryQuery}
+                formatFilter={formatFilter}
+                onFormatFilterChange={setFormatFilter}
+                onOpenDocument={(document, page) => void handleOpenDocument(document, page)}
+                onExportDocument={(document) => void handleExportDocument(document)}
+                onIndexDocument={(document) => void handleIndexDocument(document)}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                searchHits={searchHits}
+                searchLoading={searchLoading}
+                onOpenSearchHit={(hit) => void handleOpenSearchHit(hit)}
+                mode={mode}
+                onModeChange={setMode}
+              />
+            </div>
+          </>
+        )}
+      </div>
 
-      <section className="conversion-card" aria-label="המרת BKC ל-PDF">
-        <div className="conversion-heading">
-          <div><span className="label">Conversion UI</span><h2>המרת BKC ל־PDF</h2></div>
-          <div className="actions">
-            <button className="secondary" onClick={() => void chooseDestination()}>בחירת תיקיית יעד</button>
-            <button className="primary" disabled={!run || !destination} onClick={() => void enqueue([], true)}>המרת כל הספרים הנתמכים</button>
-            {queue.some((job) => job.status === "running" || job.status === "queued") &&
-              <button className="secondary danger" onClick={() => void invoke("cancel_conversions")}>ביטול בטוח</button>}
-          </div>
-        </div>
-        <div className="destination-row">
-          <strong dir="auto">{destination || "טרם נבחרה תיקיית יעד"}</strong>
-          <label><input type="radio" checked={collisionPolicy === "skip"} onChange={() => setCollisionPolicy("skip")} /> דילוג על קובץ קיים</label>
-          <label><input type="radio" checked={collisionPolicy === "rename"} onChange={() => setCollisionPolicy("rename")} /> שינוי שם אוטומטי</label>
-          {destination && <button className="link-button" onClick={() => void openPath(destination)}>פתיחת תיקיית היעד</button>}
-        </div>
-        {probe && <div className={`probe-panel probe-${probe.report.kind}`} aria-live="polite">
-          <div className="probe-heading">
-            <div><span className="label">תוצאת Probe מה־Rust backend</span><strong dir="auto">{probe.name}</strong></div>
-            <div className="probe-actions">
-              <button className="row-action" onClick={() => void exportProbe()}>הורדת דוח JSON</button>
-              <span className={`type type-${probe.report.kind}`}>{probe.report.kind.toUpperCase()}</span>
-            </div>
-          </div>
-          <dl className="probe-values">
-            <div><dt>גודל</dt><dd dir="ltr">{formatSize(probe.report.fileSize)}</dd></div>
-            <div><dt>מפענח זמין</dt><dd>{probe.report.decoderAvailable ? "כן" : "לא"}</dd></div>
-            {probe.report.bkc && <>
-              <div><dt>baseOffset</dt><dd dir="ltr">{probe.report.bkc.baseOffset.toLocaleString("en-US")}</dd></div>
-              <div><dt>startxref</dt><dd dir="ltr">{probe.report.bkc.startxref.toLocaleString("en-US")}</dd></div>
-              <div><dt>physicalXref</dt><dd dir="ltr">{probe.report.bkc.physicalXref.toLocaleString("en-US")}</dd></div>
-              <div><dt>XRef object</dt><dd dir="ltr">{probe.report.bkc.xrefObjectNumber}</dd></div>
-            </>}
-            {probe.report.bkf && <>
-              <div><dt>אינדקס עמודים</dt><dd dir="ltr">{probe.report.bkf.pageIndexStatus}</dd></div>
-              <div><dt>חתימת DjVu גלויה</dt><dd>{probe.report.bkf.standardDjvuSignatureVisible ? "כן" : "לא"}</dd></div>
-            </>}
-          </dl>
-          {probe.report.evidence.length > 0 && <details className="probe-evidence">
-            <summary>ראיות ומגבלות ({probe.report.evidence.length})</summary>
-            <ul>
-              {probe.report.evidence.map((item, index) =>
-                <li key={`${item.key}-${index}`} data-status={item.status}>
-                  <strong dir="ltr">{item.key}</strong>: {item.detail}
-                </li>)}
-            </ul>
-          </details>}
-          {!probe.report.decoderAvailable && <p className="probe-warning">
-            {probe.report.kind === "bkf"
-              ? "הקובץ זוהה כ־BKF, אך טרם קיים מפענח מלא. הוא לא יישלח למנוע ההמרה."
-              : probe.report.kind === "bkc"
-                ? "מבנה BKC זוהה, אך עדיין לא קיים פרופיל פענוח מאומת עבור וריאנט זה."
-                : "מבנה הקובץ אינו מוכר ולכן הוא לא יישלח להמרה."}
-          </p>}
-        </div>}
-        {queue.length > 0 && <div className="queue-summary" aria-live="polite">
-          <div className="overall-progress">
-            <div className="progress-copy">
-              <strong>{activeConversion ? `ממיר כעת: ${activeConversion.name}` : "סיכום ההמרה"}</strong>
-              <span>{finishedConversions.length} מתוך {queue.length} הסתיימו</span>
-            </div>
-            <progress value={queue.reduce((sum, job) => sum + job.processedBytes, 0)} max={Math.max(1, queue.reduce((sum, job) => sum + job.totalBytes, 0))} />
-            <strong>{finishedConversions.length}/{queue.length}</strong>
-          </div>
-          <div className="conversion-results">
-            <span className="result-success">{completedConversions.length} הומרו</span>
-            {queue.some((job) => job.status === "skipped") && <span>{queue.filter((job) => job.status === "skipped").length} דולגו</span>}
-            {failedConversions.length > 0 && <span className="result-failed">{failedConversions.length} לא הושלמו</span>}
-            <div className="summary-actions">
-              {lastCompleted && <button onClick={() => void openPath(lastCompleted.outputPath)}>פתיחת ה־PDF האחרון</button>}
-              {failedConversions.length > 0 && <button onClick={() => void retryFailed()}>ניסיון חוזר לנכשלים</button>}
-              {failedConversions.length > 0 && <button onClick={() => void downloadLog()}>הורדת קובץ אבחון</button>}
-            </div>
-          </div>
-        </div>}
-      </section>
-
-      <section className="library-card" aria-label="רשימת קבצים">
-        <div className="library-tools">
-          <label htmlFor="library-search">חיפוש לפי שם</label>
-          <input id="library-search" type="search" value={nameQuery}
-            onChange={(event) => setNameQuery(event.target.value)}
-            placeholder="הקלד שם קובץ…" disabled={!run} dir="auto" />
-          <label htmlFor="file-type-filter">סוג קובץ</label>
-          <select id="file-type-filter" value={fileTypeFilter} disabled={!run}
-            onChange={(event) => setFileTypeFilter(event.target.value as "" | FileType)}>
-            <option value="">כל הסוגים</option>
-            <option value="BKC">BKC — נתמך להמרה</option>
-            <option value="BKF">BKF — ללא מפענח</option>
-            <option value="Unknown">לא מזוהה</option>
-          </select>
-          {nameQuery && <span>{total.toLocaleString("he-IL")} תוצאות</span>}
-        </div>
-        <div className="library-header">
-          <span>סימון</span><span>שם</span><span>נתיב יחסי</span><span>גודל</span>
-          <span>סוג</span><span>תאריך שינוי</span><span>סטטוס</span><span>פעולה</span>
-        </div>
-        <div
-          className="virtual-viewport"
-          ref={viewportRef}
-          onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        >
-          {total === 0 && !isRunning ? (
-            <div className="empty-state">בחר תיקייה או כונן כדי לבנות את הספרייה.</div>
-          ) : (
-            <div className="virtual-spacer" style={{ height: total * ROW_HEIGHT }}>{visibleRows}</div>
-          )}
-        </div>
-        <footer className="library-footer">
-          <span>{total.toLocaleString("he-IL")} רשומות במסד הנתונים</span>
-          <span>מוצגות רק השורות שבחלון — הרשימה אינה נטענת כולה לזיכרון</span>
-        </footer>
-      </section>
+      {!focusMode && (
+        <StatusBar
+          repositories={repositories}
+          scanProgress={scanProgress}
+          bootstrap={bootstrapInfo}
+          message={message}
+        />
+      )}
     </main>
   );
 }
-
-export default App;

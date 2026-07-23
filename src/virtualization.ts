@@ -8,7 +8,7 @@ export function visibleRange(
   rowHeight: number,
   scrollTop: number,
   viewportHeight: number,
-  overscan: number,
+  overscan: number
 ): VisibleRange {
   if (total <= 0 || rowHeight <= 0) return { start: 0, end: 0 };
   const first = Math.floor(Math.max(0, scrollTop) / rowHeight);

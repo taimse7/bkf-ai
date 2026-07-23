@@ -1,7 +1,7 @@
 [package]
 name = "bkf-ai"
-version = "0.1.0"
-description = "BKF AI macOS build proof"
+version = "0.2.0"
+description = "BKF/BKC library, viewer and Otzaria local engine"
 authors = ["BKF AI contributors"]
 edition = "2021"
 
@@ -9,17 +9,35 @@ edition = "2021"
 name = "bkf_ai_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[workspace]
+members = [
+  "catalog",
+  "scanner-core",
+  "converter-core",
+  "bkf-core",
+  "search-core",
+  "text-extract",
+  "local-api"
+]
+resolver = "2"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-bkf-converter-core = { path = "converter-core" }
-bkf-container-probe = { path = "container-probe" }
+bkf-catalog = { path = "catalog" }
 bkf-scanner-core = { path = "scanner-core" }
-rusqlite = { version = "0.38", features = ["bundled"] }
+bkf-converter-core = { path = "converter-core" }
+bkf-bkf-core = { path = "bkf-core" }
+bkf-search-core = { path = "search-core" }
+bkf-text-extract = { path = "text-extract" }
+bkf-local-api = { path = "local-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 uuid = { version = "1", features = ["v4"] }
-walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
