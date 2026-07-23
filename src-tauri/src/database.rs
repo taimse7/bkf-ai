@@ -290,7 +290,7 @@ mod tests {
                     name: format!("ספר {index}.book"),
                     relative_path: format!("תיקייה/{index:05}.book"),
                     size: index as u64,
-                    file_type: if index % 2 == 0 { "BKC" } else { "Unknown" }.into(),
+                    file_type: if index.is_multiple_of(2) { "BKC" } else { "Unknown" }.into(),
                     modified_ms: Some(index as i64),
                     status: "ready".into(),
                     seen_generation: 1,

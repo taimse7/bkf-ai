@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "bkf-bkc-library",
+  "name": "ספריית BKF/BKC",
+  "version": "0.2.0",
+  "description": "ספרייה, חיפוש ותצוגת קובצי BKC/BKF באמצעות מנוע מקומי",
+  "author": "BKF AI contributors",
+  "stability": "beta",
+  "entrypoint": "index.html",
+  "minAppVersion": "0.9.92",
+  "sdkVersion": "1.x",
+  "permissions": [
+    "app.info.read",
+    "ui.feedback",
+    "network.access",
+    "plugin.storage.read",
+    "plugin.storage.write"
+  ],
+  "network": {
+    "enabled": true,
+    "allowlist": [
+      "127.0.0.1",
+      "localhost"
+    ]
+  },
+  "contributes": {
+    "toolTab": {
+      "title": "ספריית BKF/BKC",
+      "order": 20,
+      "defaultPinned": true,
+      "iconCodepoint": 60048,
+      "iconVariant": "regular"
+    }
+  }
+}

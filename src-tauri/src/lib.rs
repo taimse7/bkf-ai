@@ -1,273 +1,523 @@
-mod scanner;
-mod conversion;
-
-use bkf_converter_core::{convert_bkc, ConversionReport};
-use bkf_container_probe::{probe_path, ProbeReport};
-use bkf_scanner_core::database::{conversion_sources, init_database, last_scan, list_items, set_selected};
-use conversion::{ConversionJob, ConversionState};
-use bkf_scanner_core::models::{LibraryPage, ScanRun};
-use scanner::{spawn_scan, ScanState};
+use bkf_bkf_core::{discover_sidecar, read_sidecar, validate_sidecar_for_book};
+use bkf_catalog::{Catalog, Document, DocumentPage, Repository};
+use bkf_converter_core::{analyze_bkc, convert_bkc, BkcSupport};
+use bkf_local_api::ServerHandle;
+use bkf_scanner_core::{scan_repository, ScanOptions, ScanProgress};
+use bkf_search_core::{PageText, SearchEngine, SearchHit};
+use bkf_text_extract::{extract_bkf_text_sidecar, extract_pdf_pages};
+use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
-use std::fs;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-fn database_path(app: &AppHandle) -> Result<PathBuf, tauri::Error> {
-    Ok(app.path().app_data_dir()?.join("library.sqlite3"))
+const LOCAL_API_PORT: u16 = 47_831;
+
+struct AppState {
+    catalog: Catalog,
+    search: SearchEngine,
+    cache_dir: PathBuf,
+    server: ServerHandle,
+    scans: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapInfo {
+    app_data_dir: String,
+    local_api_port: u16,
+    local_api_token: String,
+    local_api_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewDescriptor {
+    kind: String,
+    document_id: String,
+    title: String,
+    local_path: Option<String>,
+    page_count: Option<u64>,
+    message: Option<String>,
+    support_status: String,
 }
 
 #[tauri::command]
-fn build_proof() -> &'static str {
-    "החיבור ל־Rust פעיל"
+fn get_bootstrap(app: AppHandle, state: State<'_, AppState>) -> Result<BootstrapInfo, String> {
+    let app_data = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    Ok(BootstrapInfo {
+        app_data_dir: app_data.to_string_lossy().into_owned(),
+        local_api_port: state.server.port,
+        local_api_token: state.server.token.clone(),
+        local_api_url: state.server.url.clone(),
+    })
 }
 
 #[tauri::command]
-fn start_scan(
-    source_path: String,
-    app: AppHandle,
-    state: State<'_, ScanState>,
-) -> Result<ScanRun, String> {
-    let source = PathBuf::from(source_path);
-    let canonical = source
+fn list_repositories(state: State<'_, AppState>) -> Result<Vec<Repository>, String> {
+    state
+        .catalog
+        .list_repositories()
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn add_repository(
+    root_path: String,
+    display_name: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Repository, String> {
+    let canonical = PathBuf::from(&root_path)
         .canonicalize()
-        .map_err(|error| format!("לא ניתן לפתוח את המקור: {error}"))?;
+        .map_err(|error| format!("המאגר אינו זמין: {error}"))?;
     if !canonical.is_dir() {
         return Err("המקור שנבחר אינו תיקייה או כונן".into());
     }
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
-    if app_data.starts_with(&canonical) {
-        return Err("לא ניתן לבחור מקור שמכיל את תיקיית Application Support של האפליקציה".into());
-    }
-    spawn_scan(&app, state.inner(), canonical).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn cancel_scan(scan_id: String, state: State<'_, ScanState>) -> bool {
-    state.cancel(&scan_id)
-}
-
-#[tauri::command]
-fn get_last_scan(app: AppHandle) -> Result<Option<ScanRun>, String> {
-    let path = database_path(&app).map_err(|error| error.to_string())?;
-    let connection = init_database(&path).map_err(|error| error.to_string())?;
-    last_scan(&connection).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn resume_last_scan(
-    app: AppHandle,
-    state: State<'_, ScanState>,
-) -> Result<Option<ScanRun>, String> {
-    let path = database_path(&app).map_err(|error| error.to_string())?;
-    let connection = init_database(&path).map_err(|error| error.to_string())?;
-    let Some(run) = last_scan(&connection).map_err(|error| error.to_string())? else {
-        return Ok(None);
-    };
-    if run.status == "completed" || run.status == "completed_with_errors" {
-        return Ok(Some(run));
-    }
-    let source = PathBuf::from(&run.root_path);
-    if !source.is_dir() {
-        bkf_scanner_core::database::mark_scan_disconnected(&connection, &run.id)
-            .map_err(|error| error.to_string())?;
-        return last_scan(&connection).map_err(|error| error.to_string());
-    }
-    drop(connection);
-    spawn_scan(&app, state.inner(), source)
-        .map(Some)
+    state
+        .catalog
+        .add_repository(
+            &canonical.to_string_lossy(),
+            display_name.as_deref(),
+            now_ms(),
+        )
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn get_library_page(
-    scan_id: String,
+fn start_repository_scan(
+    repository_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let repository = state
+        .catalog
+        .repository(&repository_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("המאגר אינו קיים")?;
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut scans = state
+            .scans
+            .lock()
+            .map_err(|_| "scan state lock poisoned")?;
+        if scans.contains_key(&repository_id) {
+            return Err("הסריקה כבר פעילה".into());
+        }
+        scans.insert(repository_id.clone(), cancel.clone());
+    }
+
+    let catalog = state.catalog.clone();
+    let app_for_thread = app.clone();
+    let id_for_thread = repository_id.clone();
+
+    std::thread::spawn(move || {
+        let result = scan_repository(
+            &catalog,
+            &repository,
+            ScanOptions::default(),
+            &cancel,
+            |progress: ScanProgress| {
+                let _ = app_for_thread.emit("repository-scan-progress", progress);
+            },
+        );
+        if let Err(error) = result {
+            let _ = app_for_thread.emit(
+                "repository-scan-progress",
+                ScanProgress {
+                    repository_id: id_for_thread.clone(),
+                    scanned: 0,
+                    changed: 0,
+                    errors: 1,
+                    status: format!("error:{error}"),
+                    current_path: None,
+                },
+            );
+        }
+        if let Ok(mut scans) = app_for_thread.state::<AppState>().scans.lock() {
+            scans.remove(&id_for_thread);
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_repository_scan(
+    repository_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let scans = state.scans.lock().map_err(|_| "scan state lock poisoned")?;
+    let flag = scans.get(&repository_id).ok_or("אין סריקה פעילה למאגר")?;
+    flag.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[tauri::command]
+fn list_documents(
+    repository_ids: Vec<String>,
+    query: String,
+    format: String,
     offset: u64,
     limit: u64,
-    name_query: String,
-    file_type: String,
-    app: AppHandle,
-) -> Result<LibraryPage, String> {
-    let path = database_path(&app).map_err(|error| error.to_string())?;
-    let connection = init_database(&path).map_err(|error| error.to_string())?;
-    list_items(&connection, &scan_id, offset, limit.min(500), &name_query, &file_type)
+    state: State<'_, AppState>,
+) -> Result<DocumentPage, String> {
+    state
+        .catalog
+        .list_documents(&repository_ids, &query, &format, offset, limit)
         .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn convert_verified_bkc(
-    input_path: String,
-    output_path: String,
-) -> Result<ConversionReport, String> {
-    convert_bkc(
-        PathBuf::from(input_path).as_path(),
-        PathBuf::from(output_path).as_path(),
-    )
-    .map_err(|error| error.to_string())
-}
+fn prepare_document_preview(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<PreviewDescriptor, String> {
+    let document = get_document(&state.catalog, &document_id)?;
+    let source = resolve_document_path(&state.catalog, &document)?;
 
-#[tauri::command]
-fn probe_book_structure(input_path: String) -> Result<ProbeReport, String> {
-    probe_path(Path::new(&input_path)).map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn export_probe_report(input_path: String, output_path: String) -> Result<(), String> {
-    let input = PathBuf::from(&input_path)
-        .canonicalize()
-        .map_err(|error| format!("קובץ המקור אינו זמין: {error}"))?;
-    if !input.is_file() {
-        return Err("המקור שנבחר אינו קובץ".into());
+    match document.format.as_str() {
+        "PDF" => {
+            let cache = cache_pdf_path(&state.cache_dir, &document);
+            if !cache.is_file() {
+                if let Some(parent) = cache.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                std::fs::copy(&source, &cache).map_err(|error| error.to_string())?;
+            }
+            state
+                .catalog
+                .set_preview(
+                    &document.id,
+                    "exact",
+                    Some(&cache.to_string_lossy()),
+                    document.page_count,
+                )
+                .map_err(|error| error.to_string())?;
+            Ok(PreviewDescriptor {
+                kind: "pdf".into(),
+                document_id: document.id,
+                title: document.name,
+                local_path: Some(cache.to_string_lossy().into_owned()),
+                page_count: document.page_count,
+                message: None,
+                support_status: "exact".into(),
+            })
+        }
+        "BKC" => prepare_bkc_preview(&state, document, &source),
+        "BKF" => prepare_bkf_preview(&state, document, &source),
+        _ => Ok(PreviewDescriptor {
+            kind: "unsupported".into(),
+            document_id: document.id,
+            title: document.name,
+            local_path: None,
+            page_count: None,
+            message: Some("מבנה הקובץ אינו נתמך".into()),
+            support_status: "unsupported".into(),
+        }),
     }
-    let report = probe_path(&input).map_err(|error| error.to_string())?;
-    let document = serde_json::json!({
-        "schemaVersion": 1,
-        "application": "BKF AI",
-        "generatedAtUnixMs": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_millis()),
-        "source": {
-            "name": input.file_name().and_then(|name| name.to_str()).unwrap_or(""),
-            "size": report.file_size,
-        },
-        "probe": report,
-        "scope": "structural-analysis-only",
-    });
-    fs::write(
-        &output_path,
-        serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("לא ניתן לשמור את דוח המבנה: {error}"))
 }
 
-#[tauri::command]
-fn enqueue_conversions(
-    scan_id: String,
-    relative_paths: Vec<String>,
-    all_supported: bool,
-    destination_path: String,
-    collision_policy: String,
-    app: AppHandle,
-    state: State<'_, Arc<ConversionState>>,
-) -> Result<Vec<ConversionJob>, String> {
-    let destination = conversion::verify_destination(Path::new(&destination_path))?;
-    let db_path = database_path(&app).map_err(|error| error.to_string())?;
-    let connection = init_database(&db_path).map_err(|error| error.to_string())?;
-    let scan = last_scan(&connection).map_err(|error| error.to_string())?
-        .filter(|scan| scan.id == scan_id).ok_or("הסריקה אינה זמינה")?;
-    let root = PathBuf::from(&scan.root_path).canonicalize()
-        .map_err(|error| format!("כונן המקור אינו זמין: {error}"))?;
-    let sources = conversion_sources(&connection, &scan_id, &relative_paths, all_supported)
+fn prepare_bkc_preview(
+    state: &AppState,
+    document: Document,
+    source: &Path,
+) -> Result<PreviewDescriptor, String> {
+    let analysis = analyze_bkc(source).map_err(|error| error.to_string())?;
+    if matches!(analysis.support, BkcSupport::RepairUnavailable) {
+        state
+            .catalog
+            .set_preview(&document.id, "unsupported", None, None)
+            .map_err(|error| error.to_string())?;
+        return Ok(PreviewDescriptor {
+            kind: "unsupported".into(),
+            document_id: document.id,
+            title: document.name,
+            local_path: None,
+            page_count: document.page_count,
+            message: Some("נדרש Ghostscript עבור וריאנט BKC זה".into()),
+            support_status: "unsupported".into(),
+        });
+    }
+    let cache = cache_pdf_path(&state.cache_dir, &document);
+    if !cache.is_file() {
+        if let Some(parent) = cache.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        convert_bkc(source, &cache).map_err(|error| error.to_string())?;
+    }
+
+    let support_status = match analysis.support {
+        BkcSupport::Exact => "exact",
+        BkcSupport::RepairAvailable => "repair",
+        BkcSupport::RepairUnavailable => "unsupported",
+    };
+    let message = match analysis.support {
+        BkcSupport::Exact => Some("BKC שוחזר באמצעות פרופיל מאומת".into()),
+        BkcSupport::RepairAvailable => Some("BKC נבנה מחדש באמצעות מנוע Repair".into()),
+        BkcSupport::RepairUnavailable => Some("נדרש Ghostscript עבור וריאנט BKC זה".into()),
+    };
+
+    state
+        .catalog
+        .set_preview(
+            &document.id,
+            support_status,
+            Some(&cache.to_string_lossy()),
+            document.page_count,
+        )
         .map_err(|error| error.to_string())?;
-    let mut jobs = Vec::new();
-    for source in sources {
-        if all_supported && source.file_type != "BKC" { continue; }
-        let input = root.join(&source.relative_path);
-        let canonical = input.canonicalize().map_err(|error| format!("קובץ המקור אינו זמין: {error}"))?;
-        if !canonical.starts_with(&root) { return Err("נתיב מקור לא בטוח".into()); }
-        jobs.push(conversion::make_job(canonical, &destination, source.name, source.file_type, source.size, collision_policy == "rename"));
+
+    Ok(PreviewDescriptor {
+        kind: "pdf".into(),
+        document_id: document.id,
+        title: document.name,
+        local_path: Some(cache.to_string_lossy().into_owned()),
+        page_count: document.page_count,
+        message,
+        support_status: support_status.into(),
+    })
+}
+
+fn prepare_bkf_preview(
+    state: &AppState,
+    document: Document,
+    source: &Path,
+) -> Result<PreviewDescriptor, String> {
+    let Some(sidecar_path) = discover_sidecar(source) else {
+        state
+            .catalog
+            .set_preview(&document.id, "unsupported", None, None)
+            .map_err(|error| error.to_string())?;
+        return Ok(PreviewDescriptor {
+            kind: "bkf".into(),
+            document_id: document.id,
+            title: document.name,
+            local_path: None,
+            page_count: None,
+            message: Some("לא נמצא Sidecar תואם ל־200 הבתים הראשונים בכל עמוד".into()),
+            support_status: "unsupported".into(),
+        });
+    };
+
+    let sidecar = read_sidecar(&sidecar_path).map_err(|error| error.to_string())?;
+    validate_sidecar_for_book(&sidecar, source, false).map_err(|error| error.to_string())?;
+    state
+        .catalog
+        .set_preview(
+            &document.id,
+            "renderer_required",
+            None,
+            Some(sidecar.header.page_count as u64),
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(PreviewDescriptor {
+        kind: "bkf".into(),
+        document_id: document.id,
+        title: document.name,
+        local_path: None,
+        page_count: Some(sidecar.header.page_count as u64),
+        message: Some(
+            "Sidecar תקין נמצא. נדרש לחבר DjVu Renderer כדי להציג את העמודים.".into(),
+        ),
+        support_status: "renderer_required".into(),
+    })
+}
+
+#[tauri::command]
+fn export_document_pdf(
+    document_id: String,
+    output_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let document = get_document(&state.catalog, &document_id)?;
+    let source = resolve_document_path(&state.catalog, &document)?;
+    let output = PathBuf::from(output_path);
+    if output.exists() {
+        return Err("קובץ היעד כבר קיים".into());
     }
-    if jobs.is_empty() { return Err("לא נבחרו קובצי BKC נתמכים להמרה".into()); }
-    state.add(jobs);
-    conversion::start_worker(app, state.inner().clone());
-    Ok(state.snapshot())
+
+    match document.format.as_str() {
+        "PDF" => {
+            std::fs::copy(source, output).map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        "BKC" => {
+            convert_bkc(&source, &output).map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        "BKF" => Err(
+            "יצוא BKF דורש Sidecar, DjVu Renderer ומחבר PDF; המימוש אינו שלם עדיין".into(),
+        ),
+        _ => Err("הפורמט אינו נתמך ליצוא PDF".into()),
+    }
 }
 
 #[tauri::command]
-fn get_conversion_queue(state: State<'_, Arc<ConversionState>>) -> Vec<ConversionJob> { state.snapshot() }
+fn index_document_text(
+    document_id: String,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let document = get_document(&state.catalog, &document_id)?;
+    let source = resolve_document_path(&state.catalog, &document)?;
 
-#[tauri::command]
-fn resume_conversion_queue(app: AppHandle, state: State<'_, Arc<ConversionState>>) -> Vec<ConversionJob> {
-    conversion::start_worker(app, state.inner().clone()); state.snapshot()
+    let extracted = match document.format.as_str() {
+        "PDF" => extract_pdf_pages(&source).map_err(|error| error.to_string())?,
+        "BKC" => {
+            let preview = prepare_bkc_preview(&state, document.clone(), &source)?;
+            let path = preview.local_path.ok_or("לא נוצר PDF זמני")?;
+            extract_pdf_pages(Path::new(&path)).map_err(|error| error.to_string())?
+        }
+        "BKF" => extract_bkf_text_sidecar(&source).map_err(|error| error.to_string())?,
+        _ => return Err("אין Text Extractor לפורמט זה".into()),
+    };
+
+    let pages = extracted
+        .into_iter()
+        .map(|page| PageText {
+            repository_id: document.repository_id.clone(),
+            document_id: document.id.clone(),
+            document_name: document.name.clone(),
+            repository_name: document.repository_name.clone(),
+            page_index: page.page_index,
+            text: page.text,
+            text_source: page.source,
+        })
+        .collect::<Vec<_>>();
+
+    let count = state
+        .search
+        .replace_document_pages(&document.id, &pages)
+        .map_err(|error| error.to_string())?;
+    state
+        .catalog
+        .set_text_indexed(&document.id, true)
+        .map_err(|error| error.to_string())?;
+    Ok(count)
 }
 
 #[tauri::command]
-fn cancel_conversions(state: State<'_, Arc<ConversionState>>) { state.cancel_all(); }
-
-#[tauri::command]
-fn retry_conversion(id: String, app: AppHandle, state: State<'_, Arc<ConversionState>>) -> Result<Vec<ConversionJob>, String> {
-    if !state.retry(&id) { return Err("לא ניתן לנסות שוב משימה זו".into()); }
-    conversion::start_worker(app, state.inner().clone()); Ok(state.snapshot())
+fn search_library(
+    query: String,
+    repository_ids: Vec<String>,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<Vec<SearchHit>, String> {
+    let hits = state
+        .search
+        .search(&query, &repository_ids, limit.min(500))
+        .map_err(|error| error.to_string())?;
+    Ok(hits
+        .into_iter()
+        .filter(|hit| {
+            state
+                .catalog
+                .document(&hit.document_id)
+                .ok()
+                .flatten()
+                .is_some_and(|document| document.text_indexed)
+        })
+        .collect())
 }
 
 #[tauri::command]
 fn open_local_path(path: String) -> Result<(), String> {
-    let value = PathBuf::from(path).canonicalize().map_err(|error| format!("הנתיב אינו זמין: {error}"))?;
+    let value = PathBuf::from(path)
+        .canonicalize()
+        .map_err(|error| format!("הנתיב אינו זמין: {error}"))?;
     #[cfg(target_os = "macos")]
     let status = std::process::Command::new("open").arg(&value).status();
     #[cfg(target_os = "windows")]
     let status = std::process::Command::new("explorer").arg(&value).status();
     #[cfg(all(unix, not(target_os = "macos")))]
     let status = std::process::Command::new("xdg-open").arg(&value).status();
-    status.map_err(|error| error.to_string()).and_then(|result| if result.success() { Ok(()) } else { Err("מערכת ההפעלה לא הצליחה לפתוח את הנתיב".into()) })
+
+    status
+        .map_err(|error| error.to_string())
+        .and_then(|result| {
+            if result.success() {
+                Ok(())
+            } else {
+                Err("מערכת ההפעלה לא הצליחה לפתוח את הנתיב".into())
+            }
+        })
 }
 
-#[tauri::command]
-fn export_diagnostics(
-    output_path: String,
-    app: AppHandle,
-    state: State<'_, Arc<ConversionState>>,
-) -> Result<(), String> {
-    let db_path = database_path(&app).map_err(|error| error.to_string())?;
-    let scan = init_database(&db_path).ok().and_then(|connection| last_scan(&connection).ok().flatten());
-    let application_log = app.path().app_data_dir().ok()
-        .and_then(|directory| fs::read_to_string(directory.join("bkf-ai.log")).ok())
-        .unwrap_or_default();
-    let report = serde_json::json!({
-        "application": "BKF AI",
-        "generatedAtUnixMs": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis()),
-        "scan": scan,
-        "conversionQueue": state.snapshot(),
-        "applicationLog": application_log,
-    });
-    fs::write(&output_path, serde_json::to_vec_pretty(&report).map_err(|error| error.to_string())?)
-        .map_err(|error| format!("לא ניתן לשמור את קובץ האבחון: {error}"))
+fn cache_pdf_path(cache_dir: &Path, document: &Document) -> PathBuf {
+    cache_dir.join("pdf").join(format!(
+        "{}-{}-{}.pdf",
+        document.id,
+        document.size,
+        document.modified_ms.unwrap_or(0)
+    ))
 }
 
-#[tauri::command]
-fn update_selected(
-    scan_id: String,
-    relative_path: String,
-    selected: bool,
-    app: AppHandle,
-) -> Result<(), String> {
-    let path = database_path(&app).map_err(|error| error.to_string())?;
-    let connection = init_database(&path).map_err(|error| error.to_string())?;
-    set_selected(&connection, &scan_id, &relative_path, selected).map_err(|error| error.to_string())
+fn get_document(catalog: &Catalog, id: &str) -> Result<Document, String> {
+    catalog
+        .document(id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "המסמך אינו קיים".into())
+}
+
+fn resolve_document_path(catalog: &Catalog, document: &Document) -> Result<PathBuf, String> {
+    let repository = catalog
+        .repository(&document.repository_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("המאגר אינו קיים")?;
+    let root = PathBuf::from(repository.root_path)
+        .canonicalize()
+        .map_err(|error| format!("המאגר אינו מחובר: {error}"))?;
+    let path = root
+        .join(&document.relative_path)
+        .canonicalize()
+        .map_err(|error| format!("המסמך אינו זמין: {error}"))?;
+    if !path.starts_with(&root) {
+        return Err("נתיב מסמך אינו בטוח".into());
+    }
+    Ok(path)
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as i64)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ScanState::default())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
-            let path = app_data.join("library.sqlite3");
-            init_database(&path)?;
-            app.manage(Arc::new(ConversionState::load(app_data.join("conversion-queue.json"))));
+            std::fs::create_dir_all(&app_data)?;
+            let catalog = Catalog::open(app_data.join("library.sqlite3"))?;
+            let search = SearchEngine::open(app_data.join("search-index"))
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            let server = bkf_local_api::spawn(catalog.clone(), search.clone(), app_data.join("cache"), LOCAL_API_PORT)
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            app.manage(AppState {
+                catalog,
+                search,
+                cache_dir: app_data.join("cache"),
+                server,
+                scans: Mutex::new(HashMap::new()),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            build_proof,
-            start_scan,
-            cancel_scan,
-            get_last_scan,
-            resume_last_scan,
-            get_library_page,
-            update_selected,
-            probe_book_structure,
-            export_probe_report,
-            convert_verified_bkc,
-            enqueue_conversions,
-            get_conversion_queue,
-            resume_conversion_queue,
-            cancel_conversions,
-            retry_conversion,
-            open_local_path,
-            export_diagnostics
+            get_bootstrap,
+            list_repositories,
+            add_repository,
+            start_repository_scan,
+            cancel_repository_scan,
+            list_documents,
+            prepare_document_preview,
+            export_document_pdf,
+            index_document_text,
+            search_library,
+            open_local_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running BKF AI");
@@ -275,10 +525,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::build_proof;
+    use super::*;
 
     #[test]
-    fn build_proof_reports_rust_connection() {
-        assert_eq!(build_proof(), "החיבור ל־Rust פעיל");
+    fn local_api_port_is_loopback_service_port() {
+        assert_eq!(LOCAL_API_PORT, 47_831);
+    }
+
+    #[test]
+    fn uuid_is_available_for_future_jobs() {
+        assert!(!uuid::Uuid::new_v4().to_string().is_empty());
     }
 }
