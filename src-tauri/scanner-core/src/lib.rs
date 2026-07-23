@@ -81,7 +81,7 @@ where
 {
     let root = PathBuf::from(&repository.root_path)
         .canonicalize()
-        .map_err(|error| ScanError::InvalidRepository(format!("המאגר אינו זמין: {error}"))?;
+        .map_err(|error| ScanError::InvalidRepository(format!("המאגר אינו זמין: {error}")))?;
     if !root.is_dir() {
         return Err(ScanError::InvalidRepository("המאגר אינו תיקייה".into()));
     }
@@ -125,7 +125,10 @@ where
             Ok(entry) => entry,
             Err(error) => {
                 state.errors += 1;
-                if error.io_error().is_some_and(|value| value.kind() == io::ErrorKind::NotFound) {
+                if error
+                    .io_error()
+                    .is_some_and(|value| value.kind() == io::ErrorKind::NotFound)
+                {
                     disconnected = true;
                     break;
                 }
@@ -153,9 +156,8 @@ where
         let modified_ms = metadata.modified().ok().and_then(system_time_ms);
 
         let existing_item = existing.get(&relative_path);
-        let unchanged = existing_item.is_some_and(|item| {
-            item.size == size && item.modified_ms == modified_ms
-        });
+        let unchanged =
+            existing_item.is_some_and(|item| item.size == size && item.modified_ms == modified_ms);
 
         let (id, format, status, support_status) = if unchanged {
             let item = existing_item.expect("checked above");
@@ -251,6 +253,7 @@ fn should_consider(path: &Path, options: ScanOptions) -> bool {
         .and_then(|value| value.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+
     match extension.as_str() {
         "book" | "bkc" | "bkf" => true,
         "pdf" => options.include_pdf,
@@ -274,6 +277,7 @@ pub fn classify_file(path: &Path) -> io::Result<&'static str> {
 pub fn classify_reader(reader: &mut impl Read) -> io::Result<&'static str> {
     let mut prefix = Vec::with_capacity(PREFIX_LIMIT as usize);
     reader.take(PREFIX_LIMIT).read_to_end(&mut prefix)?;
+
     Ok(if prefix.starts_with(b"BKC") {
         "BKC"
     } else if prefix.starts_with(b"BKF") {
@@ -309,9 +313,18 @@ mod tests {
 
     #[test]
     fn detects_magic_without_extension() {
-        assert_eq!(classify_reader(&mut Cursor::new(b"BKC payload")).unwrap(), "BKC");
-        assert_eq!(classify_reader(&mut Cursor::new(b"BKF payload")).unwrap(), "BKF");
-        assert_eq!(classify_reader(&mut Cursor::new(b"%PDF-1.7")).unwrap(), "PDF");
+        assert_eq!(
+            classify_reader(&mut Cursor::new(b"BKC payload")).unwrap(),
+            "BKC"
+        );
+        assert_eq!(
+            classify_reader(&mut Cursor::new(b"BKF payload")).unwrap(),
+            "BKF"
+        );
+        assert_eq!(
+            classify_reader(&mut Cursor::new(b"%PDF-1.7")).unwrap(),
+            "PDF"
+        );
     }
 
     #[test]
