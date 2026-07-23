@@ -80,9 +80,7 @@ pub fn extract_bkf_text_sidecar(book_path: &Path) -> Result<Vec<ExtractedPage>, 
         .into_iter()
         .find(|candidate| candidate.is_file())
         .ok_or_else(|| {
-            TextExtractError::Unsupported(
-                "לא נמצא Text Sidecar מתאים לקובץ BKF".into(),
-            )
+            TextExtractError::Unsupported("לא נמצא Text Sidecar מתאים לקובץ BKF".into())
         })?;
     let sidecar: TextSidecar = serde_json::from_slice(&std::fs::read(path)?)?;
     Ok(sidecar
